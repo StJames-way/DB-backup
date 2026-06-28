@@ -1,0 +1,21 @@
+#Esto son los comandos para recuperar el backup tras cifrarlo
+
+export BACKUP_ENCRYPTION_PASSWORD='la-misma-frase-usada-para-cifrar'
+export RESTORE_DB_URL='postgresql://postgres.PROJECT_REF:PASSWORD@aws-0-eu-west-1.pooler.supabase.com:5432/postgres?sslmode=require'
+
+gpg \
+  --batch \
+  --yes \
+  --pinentry-mode loopback \
+  --passphrase "$BACKUP_ENCRYPTION_PASSWORD" \
+  --decrypt \
+  --output database_backup.dump \
+  encrypted_backups/database_backup_2026-06-28_XX-XX-XX.dump.gpg
+
+pg_restore \
+  --clean \
+  --if-exists \
+  --no-owner \
+  --no-privileges \
+  --dbname "$RESTORE_DB_URL" \
+  database_backup.dump
