@@ -1,7 +1,14 @@
 #Esto son los comandos para recuperar el backup tras cifrarlo
 
-export BACKUP_ENCRYPTION_PASSWORD='la-misma-frase-usada-para-cifrar'
+
+export BACKUP_ENCRYPTION_PASSWORD='tu-frase-larga-de-cifrado'
 export RESTORE_DB_URL='postgresql://postgres.PROJECT_REF:PASSWORD@aws-0-eu-west-1.pooler.supabase.com:5432/postgres?sslmode=require'
+
+BACKUP_ID="database_backup_2026-06-28_17-39-19"
+
+cat encrypted_backups/${BACKUP_ID}.dump.gpg.*.part > ${BACKUP_ID}.dump.gpg
+
+sha256sum -c encrypted_backups/${BACKUP_ID}.dump.gpg.sha256
 
 gpg \
   --batch \
@@ -9,23 +16,13 @@ gpg \
   --pinentry-mode loopback \
   --passphrase "$BACKUP_ENCRYPTION_PASSWORD" \
   --decrypt \
-  --output database_backup.dump \
-  encrypted_backups/database_backup_2026-06-28_XX-XX-XX.dump.gpg
+  --output ${BACKUP_ID}.dump \
+  ${BACKUP_ID}.dump.gpg
 
-pg_restore \
+/usr/lib/postgresql/17/bin/pg_restore \
   --clean \
   --if-exists \
   --no-owner \
   --no-privileges \
   --dbname "$RESTORE_DB_URL" \
-  database_backup.dump
-
-
-Para disparar el edge function desde la cli:
-curl -i -X POST "https://urfbxknxmzcvgogkixdq.supabase.co/functions/v1/trigger-github-backup" \
-  -H "x-backup-trigger-secret: backup_trigger"
-
-
-  cat encrypted_backups/database_backup_2026-06-28_17-39-19.dump.gpg.part-* > database_backup.dump.gpg
-gpg --decrypt --output database_backup.dump database_backup.dump.gpg
-pg_restore --dbname "$RESTORE_DB_URL" database_backup.dump
+  ${BACKUP_ID}.dump
