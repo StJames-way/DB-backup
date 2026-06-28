@@ -3,7 +3,12 @@ name: Supabase Smart Backup with Safety Net
 on:
   repository_dispatch:
     types: [supabase_backup_trigger]
-  workflow_dispatch: # Permite probarlo manualmente con un botón gris
+  workflow_dispatch: # Activa de forma nativa el botón gris de prueba
+
+# Fuerza a GitHub a dar permisos totales de lectura sobre los secretos y escritura en el repositorio
+permissions:
+  contents: write
+  actions: read
 
 concurrency:
   group: supabase-backup
@@ -31,7 +36,7 @@ jobs:
 
     - name: Setup Dynamic Monthly Branch
       run: |
-        git config --local user.email "github-actions[bot]@://github.com"
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
         git config --local user.name "github-actions[bot]"
         
         BRANCH_NAME="backups-${{ steps.vars.outputs.CURRENT_MONTH }}"
@@ -45,11 +50,9 @@ jobs:
         fi
 
     - name: Execute Idempotent Backup
-      env:
-        DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       run: |
-        # Usamos --schema=public para que el JWT funcione de manera óptima extrayendo tus datos
-        pg_dump "$DB_URL" --schema=public --clean --if-exists --no-owner --no-privileges > database_backup.sql
+        # Inyectamos el secreto directamente usando la sintaxis nativa de tokens de contexto de GitHub
+        pg_dump "${{ secrets.SUPABASE_DB_URL }}" --schema=public --clean --if-exists --no-owner --no-privileges > database_backup.sql
 
     - name: Commit Differential Changes
       run: |
