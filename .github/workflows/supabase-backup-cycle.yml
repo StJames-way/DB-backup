@@ -120,13 +120,17 @@ jobs:
         run: |
           set -euo pipefail
 
-          mkdir -p encrypted_backups
+          mkdir -p encrypted_backups manifests
 
           RAW_DUMP="database_backup_${{ steps.vars.outputs.TIMESTAMP }}.dump"
-          ENCRYPTED_DUMP="encrypted_backups/database_backup_${{ steps.vars.outputs.TIMESTAMP }}.dump.gpg"
+          ENCRYPTED_DUMP_TMP="database_backup_${{ steps.vars.outputs.TIMESTAMP }}.dump.gpg"
+          BACKUP_PREFIX="encrypted_backups/database_backup_${{ steps.vars.outputs.TIMESTAMP }}.dump.gpg"
+          SHA_FILE="encrypted_backups/database_backup_${{ steps.vars.outputs.TIMESTAMP }}.dump.gpg.sha256"
+          MANIFEST_FILE="manifests/database_backup_${{ steps.vars.outputs.TIMESTAMP }}.json"
 
           cleanup() {
             rm -f "$RAW_DUMP"
+            rm -f "$ENCRYPTED_DUMP_TMP"
           }
           trap cleanup EXIT
 
@@ -147,14 +151,47 @@ jobs:
             --symmetric \
             --cipher-algo AES256 \
             --passphrase "$BACKUP_ENCRYPTION_PASSWORD" \
-            --output "$ENCRYPTED_DUMP" \
+            --output "$ENCRYPTED_DUMP_TMP" \
             "$RAW_DUMP"
 
-          test -s "$ENCRYPTED_DUMP"
+          test -s "$ENCRYPTED_DUMP_TMP"
+
+          sha256sum "$ENCRYPTED_DUMP_TMP" > "$SHA_FILE"
+
+          split \
+            --bytes=90M \
+            --suffix-length=3 \
+            --additional-suffix=.part \
+            "$ENCRYPTED_DUMP_TMP" \
+            "${BACKUP_PREFIX}."
+
+          PART_COUNT="$(find encrypted_backups -maxdepth 1 -type f -name "database_backup_${{ steps.vars.outputs.TIMESTAMP }}.dump.gpg.*.part" | wc -l | tr -d ' ')"
+
+          if [ "$PART_COUNT" -lt 1 ]; then
+            echo "::error::No se generaron partes del backup cifrado."
+            exit 1
+          fi
+
+          cat > "$MANIFEST_FILE" <<EOF
+          {
+            "backup_type": "full_logical_pg_dump_custom_encrypted_split",
+            "timestamp": "${{ steps.vars.outputs.TIMESTAMP }}",
+            "encrypted_original_filename": "$ENCRYPTED_DUMP_TMP",
+            "parts_prefix": "$BACKUP_PREFIX",
+            "part_size": "90M",
+            "part_count": $PART_COUNT,
+            "sha256_file": "$SHA_FILE",
+            "format": "pg_dump custom",
+            "encryption": "gpg symmetric AES256",
+            "restore_order": "cat encrypted_backups/database_backup_${{ steps.vars.outputs.TIMESTAMP }}.dump.gpg.*.part > database_backup.dump.gpg"
+          }
+          EOF
 
           rm -f "$RAW_DUMP"
+          rm -f "$ENCRYPTED_DUMP_TMP"
 
-          echo "Backup cifrado generado: $ENCRYPTED_DUMP"
+          echo "Backup cifrado troceado generado con $PART_COUNT parte(s)."
+
 
       - name: Commit Encrypted Backup
         run: |
