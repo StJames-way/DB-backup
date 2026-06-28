@@ -23,11 +23,34 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install PostgreSQL Client and GPG
+      - name: Install PostgreSQL 17 Client and GPG
         run: |
           set -euo pipefail
+
           sudo apt-get update
-          sudo apt-get install -y postgresql-client gnupg
+          sudo apt-get install -y curl ca-certificates gnupg postgresql-common
+
+          sudo install -d /usr/share/postgresql-common/pgdg
+
+          sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+
+          . /etc/os-release
+
+          sudo tee /etc/apt/sources.list.d/pgdg.sources > /dev/null <<EOF
+          Types: deb
+          URIs: https://apt.postgresql.org/pub/repos/apt
+          Suites: ${VERSION_CODENAME}-pgdg
+          Architectures: $(dpkg --print-architecture)
+          Components: main
+          Signed-By: /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          EOF
+
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+          /usr/lib/postgresql/17/bin/pg_dump --version
+          /usr/lib/postgresql/17/bin/pg_restore --version
 
       - name: Calculate Dates
         id: vars
@@ -107,7 +130,7 @@ jobs:
           }
           trap cleanup EXIT
 
-          pg_dump "$DB_URL" \
+          /usr/lib/postgresql/17/bin/pg_dump "$DB_URL" \
             --format=custom \
             --blobs \
             --no-owner \
