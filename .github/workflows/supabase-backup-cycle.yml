@@ -48,11 +48,13 @@ jobs:
           git checkout $BRANCH_NAME
           git pull origin $BRANCH_NAME
         fi
-
     - name: Execute Idempotent Backup
+      env:
+        # Forzamos a GitHub a mapear el secreto directamente como una variable de entorno de Linux
+        DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       run: |
-        # Inyectamos el secreto directamente usando la sintaxis nativa de tokens de contexto de GitHub
-        pg_dump "${{ secrets.SUPABASE_DB_URL }}" --schema=public --clean --if-exists --no-owner --no-privileges > database_backup.sql
+        # Pasamos la variable de entorno entre comillas dobles para que el sistema la inyecte de forma obligatoria
+        pg_dump "$DB_URL" --schema=public --clean --if-exists --no-owner --no-privileges > database_backup.sql
 
     - name: Commit Differential Changes
       run: |
