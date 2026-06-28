@@ -206,27 +206,50 @@ jobs:
           fi
 
 
-      - name: Smart Clean Up Old Monthly Branches
+      - name: Smart Clean Up Old Backups
         run: |
           set -euo pipefail
 
-          git fetch origin --prune
+          KEEP_BACKUPS=30
+          MIN_SAFETY_BACKUPS=7
 
-          BRANCHES="$(git branch -r | grep 'origin/backups-' | sed 's/^[[:space:]]*origin\///' | sort || true)"
-          COUNT="$(echo "$BRANCHES" | grep -c '^backups-' || true)"
+          mkdir -p encrypted_backups manifests
 
-          echo "Total de ramas de respaldo actuales: $COUNT"
+          mapfile -t MANIFESTS < <(find manifests -maxdepth 1 -type f -name 'database_backup_*.json' | sort)
+          COUNT="${#MANIFESTS[@]}"
 
-          if [ "$COUNT" -ge 4 ]; then
-            OLDEST_BRANCH="$(echo "$BRANCHES" | head -n 1)"
-            CURRENT_BRANCH="backups-${{ steps.vars.outputs.CURRENT_MONTH }}"
+          echo "Backups completos registrados por manifest: $COUNT"
 
-            if [ "$OLDEST_BRANCH" != "$CURRENT_BRANCH" ]; then
-              echo "Eliminando rama antigua expirada: $OLDEST_BRANCH"
-              git push origin --delete "$OLDEST_BRANCH"
-            else
-              echo "La rama más antigua es la actual. No se elimina nada."
-            fi
-          else
-            echo "Protección activa: Tienes $COUNT rama(s). No se elimina nada."
+          if [ "$COUNT" -le "$KEEP_BACKUPS" ]; then
+            echo "Hay $COUNT backup(s). No supera $KEEP_BACKUPS. No se borra nada."
+            exit 0
           fi
+
+          DELETE_COUNT=$((COUNT - KEEP_BACKUPS))
+          REMAINING_AFTER_DELETE=$((COUNT - DELETE_COUNT))
+
+          if [ "$REMAINING_AFTER_DELETE" -lt "$MIN_SAFETY_BACKUPS" ]; then
+            echo "Protección activa: borrar dejaría menos de $MIN_SAFETY_BACKUPS backups."
+            exit 0
+          fi
+
+          for ((i=0; i<DELETE_COUNT; i++)); do
+            MANIFEST="${MANIFESTS[$i]}"
+            BASE="$(basename "$MANIFEST" .json)"
+
+            echo "Eliminando backup antiguo: $BASE"
+
+            rm -f "$MANIFEST"
+            rm -f "encrypted_backups/${BASE}.dump.gpg.sha256"
+            rm -f "encrypted_backups/${BASE}.dump.gpg."*.part
+          done
+
+          git add -A encrypted_backups manifests
+
+          if git diff --cached --quiet; then
+            echo "No retention changes to commit."
+          else
+            git commit -m "backup: retention cleanup keep latest ${KEEP_BACKUPS} min ${MIN_SAFETY_BACKUPS} [skip ci]"
+            git push origin "backups-${{ steps.vars.outputs.CURRENT_MONTH }}"
+          fi
+
