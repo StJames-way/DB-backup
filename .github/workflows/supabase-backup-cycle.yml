@@ -192,19 +192,19 @@ jobs:
 
           echo "Backup cifrado troceado generado con $PART_COUNT parte(s)."
 
-
       - name: Commit Encrypted Backup
         run: |
           set -euo pipefail
 
-          git add encrypted_backups/*.gpg
+          git add encrypted_backups manifests
 
           if git diff --cached --quiet; then
             echo "No encrypted backup changes detected."
           else
-            git commit -m "backup: encrypted dump ${{ steps.vars.outputs.CURRENT_DAY }} [skip ci]"
+            git commit -m "backup: encrypted split dump ${{ steps.vars.outputs.CURRENT_DAY }} [skip ci]"
             git push origin "backups-${{ steps.vars.outputs.CURRENT_MONTH }}"
           fi
+
 
       - name: Smart Clean Up Old Monthly Branches
         run: |
