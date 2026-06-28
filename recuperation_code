@@ -24,3 +24,8 @@ pg_restore \
 Para disparar el edge function desde la cli:
 curl -i -X POST "https://urfbxknxmzcvgogkixdq.supabase.co/functions/v1/trigger-github-backup" \
   -H "x-backup-trigger-secret: backup_trigger"
+
+
+  cat encrypted_backups/database_backup_2026-06-28_17-39-19.dump.gpg.part-* > database_backup.dump.gpg
+gpg --decrypt --output database_backup.dump database_backup.dump.gpg
+pg_restore --dbname "$RESTORE_DB_URL" database_backup.dump
