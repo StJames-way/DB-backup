@@ -1,0 +1,12 @@
+{
+  "backup_type": "full_logical_pg_dump_custom_encrypted_split",
+  "timestamp": "2026-06-28_18-05-39",
+  "encrypted_original_filename": "database_backup_2026-06-28_18-05-39.dump.gpg",
+  "parts_prefix": "encrypted_backups/database_backup_2026-06-28_18-05-39.dump.gpg",
+  "part_size": "90M",
+  "part_count": 2,
+  "sha256_file": "encrypted_backups/database_backup_2026-06-28_18-05-39.dump.gpg.sha256",
+  "format": "pg_dump custom",
+  "encryption": "gpg symmetric AES256",
+  "restore_order": "cat encrypted_backups/database_backup_2026-06-28_18-05-39.dump.gpg.*.part > database_backup.dump.gpg"
+}
