@@ -1,0 +1,75 @@
+name: Supabase Smart Backup with Safety Net
+
+on:
+  repository_dispatch:
+    types: [supabase_backup_trigger]
+  workflow_dispatch: # Permite probarlo manualmente con un botón gris
+
+concurrency:
+  group: supabase-backup
+  cancel-in-progress: true
+
+jobs:
+  backup-cycle:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install PostgreSQL Client
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y postgresql-client
+
+    - name: Calculate Current Date
+      id: vars
+      run: |
+        echo "CURRENT_MONTH=$(date +'%m-%Y')" >> $GITHUB_OUTPUT
+
+    - name: Setup Dynamic Monthly Branch
+      run: |
+        git config --local user.email "github-actions[bot]@://github.com"
+        git config --local user.name "github-actions[bot]"
+        
+        BRANCH_NAME="backups-${{ steps.vars.outputs.CURRENT_MONTH }}"
+        
+        if ! git ls-remote --heads origin $BRANCH_NAME | grep -q $BRANCH_NAME; then
+          git checkout -b $BRANCH_NAME
+          git push origin $BRANCH_NAME
+        else
+          git checkout $BRANCH_NAME
+          git pull origin $BRANCH_NAME
+        fi
+
+    - name: Execute Idempotent Backup
+      env:
+        DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      run: |
+        # Usamos --schema=public para que el JWT funcione de manera óptima extrayendo tus datos
+        pg_dump "$DB_URL" --schema=public --clean --if-exists --no-owner --no-privileges > database_backup.sql
+
+    - name: Commit Differential Changes
+      run: |
+        git add database_backup.sql
+        git commit -m "backup: update for day $(date +'%d') [skip ci]" || echo "No changes detected today"
+        git push origin backups-${{ steps.vars.outputs.CURRENT_MONTH }}
+
+    - name: Smart Clean Up (Safety Net Activated)
+      run: |
+        git fetch --prune
+        MAP_BRANCHES=$(git branch -r | grep 'origin/backups-' | sed 's/^[[:space:]]*origin\///' | sort)
+        COUNT=$(echo "$MAP_BRANCHES" | pgrep -c '^backups-' || echo "0")
+        echo "Total de ramas de respaldo actuales: $COUNT"
+
+        if [ "$COUNT" -ge 3 ]; then
+          OLDEST_BRANCH=$(echo "$MAP_BRANCHES" | head -n 1)
+          if [ "$OLDEST_BRANCH" != "backups-${{ steps.vars.outputs.CURRENT_MONTH }}" ]; then
+            echo "Red de seguridad superada. Eliminando rama antigua expirada: $OLDEST_BRANCH"
+            git push origin --delete "$OLDEST_BRANCH"
+          fi
+        else
+          echo "Protección activa: Tienes $COUNT rama(s). No se elimina nada para garantizar la existencia de tus datos."
+        fi
