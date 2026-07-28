@@ -15,10 +15,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-SIGNATURE_RE = re.compile(
-    r"^(?:vault|bao):v(?P<version>[1-9][0-9]*):(?P<body>[A-Za-z0-9+/=_-]+)$"
-)
-MAX_PART_SIZE = 90 * 1024 * 1024
+SIGNATURE_RE = re.compile(r"^[^:]+:v(?P<version>[0-9]+):(?P<body>[A-Za-z0-9+/=]+)$")
 
 
 @dataclass(frozen=True)
@@ -41,7 +38,7 @@ def sha256_file(path: Path) -> str:
 def load_public_key(path: Path) -> tuple[Ed25519PublicKey, str]:
     loaded = serialization.load_pem_public_key(path.read_bytes())
     if not isinstance(loaded, Ed25519PublicKey):
-        raise ValueError("La clave pública fijada no es Ed25519")
+        raise ValueError("La clave pública no es Ed25519")
     der = loaded.public_bytes(
         serialization.Encoding.DER,
         serialization.PublicFormat.SubjectPublicKeyInfo,
@@ -72,17 +69,12 @@ def verify_signature(
     manifest_sha256 = hashlib.sha256(raw).hexdigest()
     bundle = json.loads(signature_path.read_text(encoding="utf-8"))
 
-    expected = {
-        "schema_version": 1,
-        "provider": "openbao-transit",
-        "algorithm": "ed25519",
-        "mount": "transit-backup",
-        "key_name": "supabase-backup-manifest",
-    }
-    for field, value in expected.items():
-        if bundle.get(field) != value:
-            raise ValueError(f"Campo de firma inesperado: {field}")
-
+    if bundle.get("schema_version") != 1:
+        raise ValueError("Schema de firma no admitido")
+    if bundle.get("provider") != "openbao-transit":
+        raise ValueError("Proveedor de firma no admitido")
+    if bundle.get("algorithm") != "ed25519":
+        raise ValueError("Algoritmo de firma no admitido")
     if bundle.get("manifest_sha256") != manifest_sha256:
         raise ValueError("La firma no corresponde al SHA-256 del manifest")
     if bundle.get("public_key_sha256") != public_key_sha256:
@@ -93,7 +85,13 @@ def verify_signature(
     if not isinstance(signing, dict) or not isinstance(provenance, dict):
         raise ValueError("Faltan signing/provenance en el manifest")
 
-    for field in ("provider", "algorithm", "mount", "key_name", "public_key_sha256"):
+    for field in (
+        "provider",
+        "algorithm",
+        "mount",
+        "key_name",
+        "public_key_sha256",
+    ):
         if signing.get(field) != bundle.get(field):
             raise ValueError(f"Manifest y firma no coinciden en {field}")
 
@@ -153,6 +151,12 @@ def validate_manifest(
     document = json.loads(manifest_path.read_text(encoding="utf-8"))
     if document.get("schema_version") != 4:
         raise ValueError(f"Schema no admitido: {manifest_path.name}")
+    if document.get("backup_type") != "full_logical_pg_dump_custom_age_encrypted_split_signed":
+        raise ValueError("Tipo de backup no admitido")
+
+    part_size_bytes = document.get("part_size_bytes")
+    if not isinstance(part_size_bytes, int) or part_size_bytes <= 0:
+        raise ValueError("part_size_bytes inválido")
 
     signature_name = document.get("signing", {}).get("signature_file")
     if not isinstance(signature_name, str):
@@ -177,7 +181,9 @@ def validate_manifest(
     seen: set[str] = set()
     part_paths: list[Path] = []
     overall = hashlib.sha256()
-    for entry in parts:
+    previous_name = ""
+
+    for index, entry in enumerate(parts):
         if not isinstance(entry, dict):
             raise ValueError("Entrada de parte inválida")
         name = entry.get("name")
@@ -185,15 +191,24 @@ def validate_manifest(
         expected_hash = entry.get("sha256")
         if not isinstance(name, str) or name in seen:
             raise ValueError(f"Parte inválida o duplicada: {name}")
+        if previous_name and name <= previous_name:
+            raise ValueError("Las partes no están ordenadas")
         if not isinstance(expected_size, int) or not isinstance(expected_hash, str):
             raise ValueError(f"Metadatos inválidos para {name}")
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+            raise ValueError(f"SHA-256 inválido para {name}")
         seen.add(name)
+        previous_name = name
+
         path = confined(repo, name, encrypted_root)
         if not path.is_file():
             raise ValueError(f"Falta la parte: {name}")
         size = path.stat().st_size
-        if size <= 0 or size > MAX_PART_SIZE or size != expected_size:
+        if size <= 0 or size > part_size_bytes or size != expected_size:
             raise ValueError(f"Tamaño inválido: {name}")
+        if index < len(parts) - 1 and size != part_size_bytes:
+            raise ValueError(f"Parte intermedia truncada: {name}")
+
         actual_hash = sha256_file(path)
         if actual_hash != expected_hash:
             raise ValueError(f"SHA-256 incorrecto: {name}")
@@ -213,8 +228,14 @@ def validate_manifest(
     if not sha_path.is_file():
         raise ValueError(f"Falta el fichero SHA-256: {sha_name}")
     words = sha_path.read_text(encoding="utf-8").split()
-    if not words or words[0] != overall_hash:
+    if len(words) < 2 or words[0] != overall_hash:
         raise ValueError("El fichero SHA-256 separado no coincide")
+    if words[1] != Path(document.get("encrypted_original_filename", "")).name:
+        raise ValueError("El nombre registrado en el fichero SHA-256 no coincide")
+
+    plaintext_hash = document.get("plaintext_dump_sha256")
+    if not isinstance(plaintext_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", plaintext_hash):
+        raise ValueError("plaintext_dump_sha256 inválido")
 
     return ValidatedBackup(
         manifest=manifest_path.resolve(),
@@ -259,78 +280,63 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     repo = args.repo_root.resolve()
-    public_key, fingerprint = load_public_key(args.public_key.resolve())
-    if fingerprint != args.expected_public_key_sha256.lower():
-        raise SystemExit(
-            f"Huella de clave pública incorrecta: {fingerprint} != "
-            f"{args.expected_public_key_sha256.lower()}"
+    expected_key_sha = args.expected_public_key_sha256.lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_key_sha):
+        raise ValueError("Huella pública esperada inválida")
+
+    public_key, actual_key_sha = load_public_key(args.public_key.resolve())
+    if actual_key_sha != expected_key_sha:
+        raise ValueError(
+            f"Huella pública incorrecta: esperada {expected_key_sha}, obtenida {actual_key_sha}"
         )
 
-    if args.manifest:
-        manifest_path = args.manifest
-        if not manifest_path.is_absolute():
-            manifest_path = repo / manifest_path
-        manifest_paths = [manifest_path.resolve()]
-    else:
-        manifest_paths = sorted((repo / "manifests").glob("database_backup_*.json"))
+    manifests_root = (repo / "manifests").resolve()
+    manifests_root.mkdir(parents=True, exist_ok=True)
 
+    selected = args.manifest or args.new_manifest
+    if selected:
+        selected_path = selected if selected.is_absolute() else repo / selected
+        item = validate_manifest(repo, selected_path.resolve(), public_key, actual_key_sha)
+        if args.reassemble_to:
+            reassemble(item, args.reassemble_to.resolve())
+        print(f"Backup verificado: {item.manifest.name}")
+        return 0
+
+    manifest_paths = sorted(manifests_root.glob("database_backup_*.json"))
     if not manifest_paths:
-        raise SystemExit("No se encontraron manifests")
+        raise ValueError("No existen manifests")
 
     validated: list[ValidatedBackup] = []
     errors: list[str] = []
-    for manifest in manifest_paths:
+    for path in manifest_paths:
         try:
-            validated.append(validate_manifest(repo, manifest, public_key, fingerprint))
-        except Exception as exc:  # noqa: BLE001 - aggregate all verification failures
-            errors.append(f"{manifest.name}: {exc}")
+            validated.append(validate_manifest(repo, path, public_key, actual_key_sha))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{path.name}: {exc}")
 
     if errors:
-        print("Backups inválidos o incompletos:", file=sys.stderr)
-        for error in errors:
-            print(f" - {error}", file=sys.stderr)
-        return 1
+        raise ValueError("Backups inconsistentes:\n - " + "\n - ".join(errors))
 
-    if args.new_manifest:
-        expected_new = args.new_manifest
-        if not expected_new.is_absolute():
-            expected_new = repo / expected_new
-        if expected_new.resolve() not in {item.manifest for item in validated}:
-            raise SystemExit("El backup nuevo no está entre los backups verificados")
+    if args.retain < 0:
+        raise ValueError("retain no puede ser negativo")
+    if args.delete_old and args.retain <= 0:
+        raise ValueError("--delete-old exige --retain mayor que cero")
 
-    if args.reassemble_to:
-        if len(validated) != 1:
-            raise SystemExit("--reassemble-to requiere exactamente un --manifest")
-        reassemble(validated[0], args.reassemble_to.resolve())
-        print(f"Backup reensamblado y verificado: {args.reassemble_to.resolve()}")
+    if args.delete_old and len(validated) > args.retain:
+        for item in validated[:-args.retain]:
+            for part in item.parts:
+                part.unlink()
+            item.sha_file.unlink()
+            item.signature.unlink()
+            item.manifest.unlink()
 
-    print(f"Backups completamente firmados y verificados: {len(validated)}")
-
-    if args.retain:
-        if args.retain < 1:
-            raise SystemExit("--retain debe ser al menos 1")
-        if len(validated) > args.retain:
-            delete = validated[:-args.retain]
-            if not args.delete_old:
-                print(f"Se eliminarían {len(delete)} backups; falta --delete-old")
-            else:
-                for item in delete:
-                    print(f"Eliminando backup antiguo verificado: {item.manifest.name}")
-                    for path in item.parts:
-                        path.unlink()
-                    item.sha_file.unlink()
-                    item.signature.unlink()
-                    item.manifest.unlink()
-                remaining = list((repo / "manifests").glob("database_backup_*.json"))
-                if len(remaining) != args.retain:
-                    raise SystemExit(
-                        f"Resultado de retención inesperado: quedan {len(remaining)} manifests"
-                    )
-        else:
-            print(f"Retención: {len(validated)} <= {args.retain}; no se borra nada")
-
+    print(f"Backups verificados: {len(validated)}")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception as exc:  # noqa: BLE001
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise SystemExit(1)
