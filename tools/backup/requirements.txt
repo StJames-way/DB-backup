@@ -1,0 +1,3 @@
+# Dependencia utilizada por verify_backup_set.py para verificar firmas Ed25519.
+# Versión fijada y validada con este kit.
+cryptography==46.0.4
