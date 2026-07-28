@@ -1,0 +1,30 @@
+name: Supabase age OpenBao reusable backup
+
+on:
+  workflow_call:
+    inputs:
+      event_name:
+        required: true
+        type: string
+      force:
+        required: false
+        type: boolean
+        default: false
+      dispatch_source:
+        required: true
+        type: string
+      dispatch_policy:
+        required: true
+        type: string
+      dispatch_format_version:
+        required: true
+        type: number
+      dispatch_age_recipient_sha256:
+        required: false
+        type: string
+      backup_age_recipient:
+        required: true
+        type: string
+    secrets:
+      SUPABASE_DB_URL:
+        required: true
