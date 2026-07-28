@@ -15,13 +15,20 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-parser = argparse.ArgumentParser()
-parser.add_argument("manifest", type=Path)
-parser.add_argument("dump", type=Path)
-args = parser.parse_args()
-manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
-expected = manifest["plaintext_dump_sha256"]
-actual = sha256_file(args.dump)
-if actual != expected:
-    raise SystemExit(f"SHA-256 del dump descifrado incorrecto: {actual} != {expected}")
-print("SHA-256 del dump descifrado verificado")
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("manifest", type=Path)
+    parser.add_argument("dump", type=Path)
+    args = parser.parse_args()
+
+    document = json.loads(args.manifest.read_text(encoding="utf-8"))
+    expected = document.get("plaintext_dump_sha256")
+    actual = sha256_file(args.dump)
+    if actual != expected:
+        raise SystemExit(f"SHA-256 del dump incorrecto: esperado {expected}, obtenido {actual}")
+    print(f"SHA-256 del dump correcto: {actual}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
