@@ -52,7 +52,7 @@ jobs:
       TRUSTED_VERIFIER_SHA256: 599337bb06d16997862ee982050b53a72eb975b898eb3ec04ba9d81eab9ea3a7
       # Sustituir por el SHA-256 real de BACKUP_AGE_RECIPIENT antes de aprobar
       # el primer commit del repositorio backup-workflows.
-      EXPECTED_AGE_RECIPIENT_SHA256: age1h4zpzjmlnrahaem39ned7jjl3smjwen6vevnt4dvvjz36scav3zsrtm3w3
+      EXPECTED_AGE_RECIPIENT_SHA256: 6b4a2b600524856911741bff1d337f199952fda5add769f922c5eb0b06a68366
 
     steps:
       - name: Checkout caller repository
