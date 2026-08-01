@@ -28,7 +28,7 @@ on:
         type: string
     secrets:
       SUPABASE_DB_URL:
-        required: true
+        required: truey
 
 permissions:
   contents: write
