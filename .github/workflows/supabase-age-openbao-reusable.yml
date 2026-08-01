@@ -94,17 +94,79 @@ jobs:
       - name: Install runner dependencies
         run: |
           set -euo pipefail
+
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
             age \
-            postgresql-client \
+            ca-certificates \
+            curl \
             python3-cryptography
-          for tool in age curl git jq openssl pg_dump pg_restore python3 sha256sum split; do
-            command -v "$tool" >/dev/null || { echo "::error::Falta $tool"; exit 1; }
+
+          # Ubuntu 24.04 incluye PostgreSQL 16. El servidor Supabase usa
+          # PostgreSQL 17, así que instalamos explícitamente el cliente 17
+          # desde el repositorio oficial PGDG.
+          sudo install -d -m 0755 /usr/share/postgresql-common/pgdg
+          sudo curl \
+            --fail \
+            --silent \
+            --show-error \
+            --output /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+
+          . /etc/os-release
+          printf '%s\n' \
+            'Types: deb' \
+            'URIs: https://apt.postgresql.org/pub/repos/apt' \
+            "Suites: ${VERSION_CODENAME}-pgdg" \
+            'Components: main' \
+            'Signed-By: /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc' \
+            | sudo tee /etc/apt/sources.list.d/pgdg.sources >/dev/null
+
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            postgresql-client-17
+
+          PG17_BIN="/usr/lib/postgresql/17/bin"
+          test -x "$PG17_BIN/pg_dump" || {
+            echo "::error::No se instaló pg_dump 17."
+            exit 1
+          }
+          test -x "$PG17_BIN/pg_restore" || {
+            echo "::error::No se instaló pg_restore 17."
+            exit 1
+          }
+          test -x "$PG17_BIN/psql" || {
+            echo "::error::No se instaló psql 17."
+            exit 1
+          }
+
+          # GITHUB_PATH se aplica a los pasos siguientes. El export permite
+          # verificar la versión también dentro de este mismo paso.
+          echo "$PG17_BIN" >> "$GITHUB_PATH"
+          export PATH="$PG17_BIN:$PATH"
+
+          for tool in age curl git jq openssl pg_dump pg_restore psql python3 sha256sum split; do
+            command -v "$tool" >/dev/null || {
+              echo "::error::Falta $tool"
+              exit 1
+            }
           done
+
           python3 -c 'import cryptography'
+
           pg_dump --version
+          pg_restore --version
+          psql --version
           age --version
+
+          pg_dump --version | grep -Eq '^pg_dump \(PostgreSQL\) 17\.' || {
+            echo "::error::La versión activa de pg_dump no es PostgreSQL 17."
+            exit 1
+          }
+          pg_restore --version | grep -Eq '^pg_restore \(PostgreSQL\) 17\.' || {
+            echo "::error::La versión activa de pg_restore no es PostgreSQL 17."
+            exit 1
+          }
 
       - name: Validate trigger and configuration
         id: validate
@@ -237,6 +299,38 @@ jobs:
             fi
           }
           trap cleanup EXIT INT TERM
+
+          CLIENT_MAJOR="$(
+            pg_dump --version |
+            sed -E 's/^pg_dump \(PostgreSQL\) ([0-9]+).*/\1/'
+          )"
+          SERVER_VERSION_NUM="$(
+            psql "$DB_URL" \
+              --no-psqlrc \
+              --no-align \
+              --tuples-only \
+              --command 'SHOW server_version_num' |
+            tr -d '[:space:]'
+          )"
+
+          [[ "$CLIENT_MAJOR" =~ ^[0-9]+$ ]] || {
+            echo "::error::No se pudo determinar la versión mayor de pg_dump."
+            exit 1
+          }
+          [[ "$SERVER_VERSION_NUM" =~ ^[0-9]+$ ]] || {
+            echo "::error::No se pudo determinar server_version_num."
+            exit 1
+          }
+
+          SERVER_MAJOR="$((SERVER_VERSION_NUM / 10000))"
+
+          printf 'PostgreSQL server major: %s\n' "$SERVER_MAJOR"
+          printf 'pg_dump client major:   %s\n' "$CLIENT_MAJOR"
+
+          if [ "$CLIENT_MAJOR" -lt "$SERVER_MAJOR" ]; then
+            echo "::error::pg_dump $CLIENT_MAJOR no puede exportar PostgreSQL $SERVER_MAJOR."
+            exit 1
+          fi
 
           pg_dump "$DB_URL" \
             --format=custom \
