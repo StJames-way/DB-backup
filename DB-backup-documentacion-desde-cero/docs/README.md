@@ -1,0 +1,16 @@
+# Índice
+
+1. [Guía principal desde cero](instructions/README.md)
+2. [Mapa de archivos](instructions/01-files-map.md)
+3. [Instalación detallada](instructions/02-install-from-zero.md)
+4. [Variables de GitHub](instructions/03-github-variables.md)
+5. [Matriz de cambios y SHA](instructions/04-update-cascade.md)
+6. [Pruebas](instructions/05-tests.md)
+7. [Recuperación](instructions/06-recovery-drill.md)
+8. [Arquitectura Mermaid](diagrams/architecture.md)
+9. [Supabase Edge Function](supabase/README.md)
+10. [Mac/PC](mac-pc/README.md)
+11. [OpenBao](openbao/README.md)
+12. [backup-signer](backup-signer/README.md)
+13. [Checklist de puesta en marcha](checklists/GO-LIVE.md)
+14. [Checklist de cambios](checklists/CHANGE-CHECKLIST.md)

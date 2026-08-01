@@ -1,0 +1,51 @@
+app = "camino-backup-signer"
+primary_region = "cdg"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
+  GITHUB_OIDC_AUDIENCE = "openbao://supabase-backup-signing"
+
+  ALLOWED_REPOSITORY = "StJames-way/DB-backup"
+  ALLOWED_REPOSITORY_ID = "REPLACE_WITH_REPOSITORY_ID"
+  ALLOWED_REPOSITORY_OWNER_ID = "REPLACE_WITH_OWNER_ID"
+  ALLOWED_REF = "refs/heads/main"
+  ALLOWED_JOB_WORKFLOW_REF = "StJames-way/DB-backup/.github/workflows/supabase-age-openbao-reusable.yml@9df9f393517fffddca9e4bb7264211010cb0912b"
+  ALLOWED_CALLER_WORKFLOW_REF = "StJames-way/DB-backup/.github/workflows/supabase-backup-dispatch.yml@refs/heads/main"
+  ALLOWED_EVENTS = "workflow_dispatch,repository_dispatch"
+
+  OPENBAO_ADDR = "https://camino-openbao.internal:8200"
+  OPENBAO_CA_FILE = "/etc/ssl/certs/camino-openbao-ca.pem"
+  OPENBAO_AUTH_MOUNT = "approle-backup"
+  OPENBAO_TRANSIT_MOUNT = "transit-backup"
+  OPENBAO_KEY_NAME = "supabase-backup-manifest"
+
+  MAX_MANIFEST_BYTES = "262144"
+  REQUEST_TIMEOUT_SECONDS = "10"
+  JWT_LEEWAY_SECONDS = "30"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 5
+    hard_limit = 10
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/readyz"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
