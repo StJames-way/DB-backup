@@ -1,4 +1,4 @@
-name: Trusted Supabase age + OpenBao backup
+name: Trusted Supabase age backup via backup-signer
 
 on:
   workflow_call:
@@ -26,9 +26,12 @@ on:
       backup_age_recipient:
         required: true
         type: string
+      backup_signer_url:
+        required: true
+        type: string
     secrets:
       SUPABASE_DB_URL:
-        required: truey
+        required: true
 
 permissions:
   contents: write
@@ -37,22 +40,16 @@ permissions:
 
 jobs:
   backup-cycle:
-    runs-on: [self-hosted, linux, x64, fly-backup]
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
 
     env:
       BACKUP_STORAGE_BRANCH: backups-signed-latest-30
-      OPENBAO_ADDR: http://camino-openbao.internal:8200
-      OPENBAO_AUTH_MOUNT: jwt-github-backup
-      OPENBAO_AUTH_ROLE: backup-signer-github
-      OPENBAO_TRANSIT_MOUNT: transit-backup
-      OPENBAO_KEY_NAME: supabase-backup-manifest
       OPENBAO_OIDC_AUDIENCE: openbao://supabase-backup-signing
+      BACKUP_SIGNER_URL: ${{ inputs.backup_signer_url }}
+      EXPECTED_AGE_RECIPIENT_SHA256: f59fd599322f109270cfa7fd614e38b8eb7d5ca823c0443f8f0d55651e4b31aa
       BACKUP_SIGNING_PUBLIC_KEY_SHA256: 4011dd69e227bfcf6f39b3f44b1ad499d2a582c9f3eed93d8896e61b7485ce96
-      TRUSTED_VERIFIER_SHA256: 599337bb06d16997862ee982050b53a72eb975b898eb3ec04ba9d81eab9ea3a7
-      # Sustituir por el SHA-256 real de BACKUP_AGE_RECIPIENT antes de aprobar
-      # el primer commit del repositorio backup-workflows.
-      EXPECTED_AGE_RECIPIENT_SHA256: 6b4a2b600524856911741bff1d337f199952fda5add769f922c5eb0b06a68366
+      EXPECTED_BACKUP_SIGNER_URL: https://camino-backup-signer.fly.dev
 
     steps:
       - name: Checkout caller repository
@@ -61,47 +58,52 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.sha }}
 
-      - name: Validate trusted assets before switching branch
-        run: |
-          set -euo pipefail
-          [[ "$EXPECTED_AGE_RECIPIENT_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
-            echo "::error::Debes fijar EXPECTED_AGE_RECIPIENT_SHA256 en el reusable workflow."
-            exit 1
-          }
-          test -f config/backup-signing-public-key.pem
-          test -f tools/backup/verify_backup_set.py
-          ACTUAL_VERIFIER_SHA="$(sha256sum tools/backup/verify_backup_set.py | awk '{print $1}')"
-          [ "$ACTUAL_VERIFIER_SHA" = "$TRUSTED_VERIFIER_SHA256" ] || {
-            echo "::error::verify_backup_set.py no coincide con la versión aprobada."
-            exit 1
-          }
-          ACTUAL_KEY_SHA="$(
-            openssl pkey -pubin -in config/backup-signing-public-key.pem -outform DER \
-              | sha256sum | awk '{print $1}'
-          )"
-          [ "$ACTUAL_KEY_SHA" = "$BACKUP_SIGNING_PUBLIC_KEY_SHA256" ] || {
-            echo "::error::La clave pública Ed25519 no coincide con la huella aprobada."
-            exit 1
-          }
-          install -d -m 0700 /tmp/backup-trusted
-          install -m 0500 tools/backup/verify_backup_set.py /tmp/backup-trusted/
-          install -m 0400 config/backup-signing-public-key.pem /tmp/backup-trusted/
+      - name: Checkout immutable reusable assets
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .trusted-workflow
+          sparse-checkout: |
+            tools/backup
+            config/backup-signing-public-key.pem
 
-      - name: Install or validate runner dependencies
+      - name: Prepare immutable trusted tools
         run: |
           set -euo pipefail
-          missing=0
-          for tool in age curl git jq openssl pg_dump pg_restore python3 sha256sum split; do
-            command -v "$tool" >/dev/null || { echo "Falta $tool"; missing=1; }
-          done
-          python3 -c 'import cryptography' >/dev/null 2>&1 || missing=1
-          if [ "$missing" -ne 0 ]; then
-            echo "::error::El runner fly-backup no contiene todas las dependencias."
-            echo "Instala PostgreSQL 17 client, age, curl, jq, OpenSSL y python3-cryptography en la imagen del runner."
+          install -d -m 0700 /tmp/backup-trusted
+          install -m 0500 .trusted-workflow/tools/backup/build_manifest.py /tmp/backup-trusted/
+          install -m 0500 .trusted-workflow/tools/backup/verify_backup_set.py /tmp/backup-trusted/
+          install -m 0500 .trusted-workflow/tools/backup/verify_signature.py /tmp/backup-trusted/
+          install -m 0400 .trusted-workflow/config/backup-signing-public-key.pem /tmp/backup-trusted/
+          openssl pkey -pubin -in /tmp/backup-trusted/backup-signing-public-key.pem -noout
+          ACTUAL_KEY_SHA256="$(
+            openssl pkey \
+              -pubin \
+              -in /tmp/backup-trusted/backup-signing-public-key.pem \
+              -outform DER \
+            | sha256sum \
+            | awk '{print $1}'
+          )"
+          [ "$ACTUAL_KEY_SHA256" = "$BACKUP_SIGNING_PUBLIC_KEY_SHA256" ] || {
+            echo "::error::La clave pública no coincide con la huella aprobada."
             exit 1
-          fi
+          }
+          rm -rf .trusted-workflow
+
+      - name: Install runner dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            age \
+            postgresql-client \
+            python3-cryptography
+          for tool in age curl git jq openssl pg_dump pg_restore python3 sha256sum split; do
+            command -v "$tool" >/dev/null || { echo "::error::Falta $tool"; exit 1; }
+          done
+          python3 -c 'import cryptography'
           pg_dump --version
-          pg_restore --version
           age --version
 
       - name: Validate trigger and configuration
@@ -112,34 +114,49 @@ jobs:
         run: |
           set -euo pipefail
           [ "$GITHUB_REF" = "refs/heads/main" ] || {
-            echo "::error::El caller debe ejecutarse desde main."; exit 1;
+            echo "::error::El caller debe ejecutarse desde main."
+            exit 1
           }
           [ -n "$DB_URL" ] || { echo "::error::Falta SUPABASE_DB_URL."; exit 1; }
-          case "$DB_URL" in postgres://*|postgresql://*) ;; *)
-            echo "::error::SUPABASE_DB_URL no parece PostgreSQL."; exit 1;;
+          case "$DB_URL" in
+            postgres://*|postgresql://*) ;;
+            *) echo "::error::SUPABASE_DB_URL no parece PostgreSQL."; exit 1 ;;
           esac
           [ -n "$BACKUP_AGE_RECIPIENT" ] || {
-            echo "::error::Falta BACKUP_AGE_RECIPIENT."; exit 1;
+            echo "::error::Falta BACKUP_AGE_RECIPIENT."
+            exit 1
+          }
+          case "$BACKUP_SIGNER_URL" in
+            https://*) ;;
+            *) echo "::error::BACKUP_SIGNER_URL debe usar HTTPS."; exit 1 ;;
+          esac
+          [ "${BACKUP_SIGNER_URL%/}" = "$EXPECTED_BACKUP_SIGNER_URL" ] || {
+            echo "::error::BACKUP_SIGNER_URL no coincide con el firmador aprobado."
+            exit 1
           }
           printf 'recipient-test' | age -e -r "$BACKUP_AGE_RECIPIENT" -o /tmp/age-test.age
           rm -f /tmp/age-test.age
           AGE_SHA="$(printf '%s' "$BACKUP_AGE_RECIPIENT" | sha256sum | awk '{print $1}')"
           [ "$AGE_SHA" = "$EXPECTED_AGE_RECIPIENT_SHA256" ] || {
-            echo "::error::El recipient age no coincide con la huella aprobada en el workflow confiable."
+            echo "::error::El recipient age no coincide con la huella aprobada."
             exit 1
           }
           if [ "${{ inputs.event_name }}" = "repository_dispatch" ]; then
             [ "${{ inputs.dispatch_source }}" = "supabase-edge-function" ] || {
-              echo "::error::Origen repository_dispatch no reconocido."; exit 1;
+              echo "::error::Origen repository_dispatch no reconocido."
+              exit 1
             }
             [ "${{ inputs.dispatch_policy }}" = "daily_full_age_encrypted_openbao_signed_retain_last_30_verified" ] || {
-              echo "::error::Política de backup no reconocida."; exit 1;
+              echo "::error::Política de backup no reconocida."
+              exit 1
             }
-            [ "${{ inputs.dispatch_format_version }}" = "4" ] || {
-              echo "::error::Versión de backup no reconocida."; exit 1;
+            [ "${{ inputs.dispatch_format_version }}" = "5" ] || {
+              echo "::error::Versión de backup no reconocida."
+              exit 1
             }
             [ "$AGE_SHA" = "${{ inputs.dispatch_age_recipient_sha256 }}" ] || {
-              echo "::error::Supabase y el workflow confiable no tienen el mismo recipient age."; exit 1;
+              echo "::error::Supabase y GitHub no tienen el mismo recipient age."
+              exit 1
             }
           fi
           echo "::add-mask::$DB_URL"
@@ -193,27 +210,30 @@ jobs:
           BACKUP_AGE_RECIPIENT: ${{ inputs.backup_age_recipient }}
           AGE_RECIPIENT_SHA256: ${{ steps.validate.outputs.AGE_RECIPIENT_SHA256 }}
           TIMESTAMP: ${{ steps.vars.outputs.TIMESTAMP }}
+          EXPECTED_JOB_WORKFLOW_REF: ${{ job.workflow_ref }}
+          EXPECTED_JOB_WORKFLOW_SHA: ${{ job.workflow_sha }}
         run: |
           set -euo pipefail
           umask 077
 
-          RAW_DUMP="database_backup_${TIMESTAMP}.dump"
-          ENCRYPTED_TMP="database_backup_${TIMESTAMP}.dump.age"
-          PREFIX="encrypted_backups/database_backup_${TIMESTAMP}.dump.age"
-          SHA_FILE="encrypted_backups/database_backup_${TIMESTAMP}.dump.age.sha256"
-          MANIFEST="manifests/database_backup_${TIMESTAMP}.json"
-          SIGNATURE="signatures/database_backup_${TIMESTAMP}.json"
+          BASE="database_backup_${TIMESTAMP}"
+          RAW_DUMP="${BASE}.dump"
+          ENCRYPTED_TMP="${BASE}.dump.age"
+          PREFIX="encrypted_backups/${BASE}.dump.age"
+          MANIFEST="manifests/${BASE}.json"
+          SIGNATURE="signatures/${BASE}.sig"
+          SIGNATURE_META="signatures/${BASE}.json"
           OIDC_JSON="$(mktemp)"
           CLAIMS_JSON="$(mktemp)"
-          LOGIN_JSON="$(mktemp)"
-          SIGN_JSON="$(mktemp)"
+          REQUEST_JSON="$(mktemp)"
+          RESPONSE_JSON="$(mktemp)"
           COMPLETE=false
 
           cleanup() {
-            rm -f "$RAW_DUMP" "$ENCRYPTED_TMP" "$OIDC_JSON" "$CLAIMS_JSON" "$LOGIN_JSON" "$SIGN_JSON"
-            unset OIDC_TOKEN OPENBAO_TOKEN || true
+            rm -f "$RAW_DUMP" "$ENCRYPTED_TMP" "$OIDC_JSON" "$CLAIMS_JSON" "$REQUEST_JSON" "$RESPONSE_JSON"
+            unset OIDC_TOKEN || true
             if [ "$COMPLETE" != "true" ]; then
-              rm -f "$MANIFEST" "$SIGNATURE" "$SHA_FILE" "${PREFIX}."*.part
+              rm -f "$MANIFEST" "$SIGNATURE" "$SIGNATURE_META" "${PREFIX}."*.part
             fi
           }
           trap cleanup EXIT INT TERM
@@ -230,7 +250,6 @@ jobs:
           age -e -r "$BACKUP_AGE_RECIPIENT" -o "$ENCRYPTED_TMP" "$RAW_DUMP"
           test -s "$ENCRYPTED_TMP"
           ENCRYPTED_SHA256="$(sha256sum "$ENCRYPTED_TMP" | awk '{print $1}')"
-          printf '%s  %s\n' "$ENCRYPTED_SHA256" "$(basename "$ENCRYPTED_TMP")" > "$SHA_FILE"
 
           split --bytes=90M --suffix-length=3 --additional-suffix=.part \
             "$ENCRYPTED_TMP" "${PREFIX}."
@@ -244,7 +263,11 @@ jobs:
           OIDC_TOKEN="$(jq -er '.value' "$OIDC_JSON")"
 
           OIDC_TOKEN="$OIDC_TOKEN" python3 - "$CLAIMS_JSON" <<'PY'
-          import base64, json, os, sys
+          import base64
+          import json
+          import os
+          import sys
+
           token = os.environ["OIDC_TOKEN"]
           payload = token.split(".")[1]
           payload += "=" * (-len(payload) % 4)
@@ -257,149 +280,123 @@ jobs:
           missing = [name for name in required if name not in claims]
           if missing:
               raise SystemExit(f"OIDC claims missing: {missing}")
-          if claims["runner_environment"] != "self-hosted":
-              raise SystemExit("OIDC token is not from a self-hosted runner")
+          if claims["runner_environment"] != "github-hosted":
+              raise SystemExit("OIDC token is not from a GitHub-hosted runner")
+          if claims["repository"] != os.environ["GITHUB_REPOSITORY"]:
+              raise SystemExit("OIDC repository mismatch")
+          if claims["ref"] != "refs/heads/main":
+              raise SystemExit("OIDC ref mismatch")
+          if claims["job_workflow_ref"] != os.environ["EXPECTED_JOB_WORKFLOW_REF"]:
+              raise SystemExit("OIDC job_workflow_ref mismatch")
+          if claims["job_workflow_sha"] != os.environ["EXPECTED_JOB_WORKFLOW_SHA"]:
+              raise SystemExit("OIDC job_workflow_sha mismatch")
           with open(sys.argv[1], "w", encoding="utf-8") as handle:
               json.dump({name: str(claims[name]) for name in required}, handle, sort_keys=True)
           PY
 
           CREATED_AT_UTC="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          export TIMESTAMP CREATED_AT_UTC ENCRYPTED_TMP PREFIX SHA_FILE MANIFEST SIGNATURE
-          export PLAINTEXT_SHA256 ENCRYPTED_SHA256 AGE_RECIPIENT_SHA256
-          export BACKUP_SIGNING_PUBLIC_KEY_SHA256 CLAIMS_JSON
+          REPOSITORY="$(jq -er '.repository' "$CLAIMS_JSON")"
+          WORKFLOW_REF="$(jq -er '.workflow_ref' "$CLAIMS_JSON")"
+          SOURCE_SHA="$(jq -er '.sha' "$CLAIMS_JSON")"
+          RUN_ID="$(jq -er '.run_id' "$CLAIMS_JSON")"
+          RUN_ATTEMPT="$(jq -er '.run_attempt' "$CLAIMS_JSON")"
 
-          python3 - <<'PY'
-          import glob, hashlib, json, os
+          python3 /tmp/backup-trusted/build_manifest.py \
+            --parts-glob "${PREFIX}.*.part" \
+            --plaintext-sha256 "$PLAINTEXT_SHA256" \
+            --encrypted-sha256 "$ENCRYPTED_SHA256" \
+            --age-recipient-sha256 "$AGE_RECIPIENT_SHA256" \
+            --created-at-utc "$CREATED_AT_UTC" \
+            --timestamp-madrid "$TIMESTAMP" \
+            --repository "$REPOSITORY" \
+            --workflow-ref "$WORKFLOW_REF" \
+            --workflow-sha "$SOURCE_SHA" \
+            --run-id "$RUN_ID" \
+            --run-attempt "$RUN_ATTEMPT" \
+            --output "$MANIFEST"
+
+          jq -n --slurpfile manifest "$MANIFEST" '{manifest:$manifest[0]}' > "$REQUEST_JSON"
+          curl --fail --silent --show-error \
+            --retry 3 \
+            --retry-all-errors \
+            --connect-timeout 20 \
+            --max-time 90 \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H 'Content-Type: application/json' \
+            --data-binary "@$REQUEST_JSON" \
+            "${BACKUP_SIGNER_URL%/}/v1/sign" \
+            > "$RESPONSE_JSON"
+          unset OIDC_TOKEN
+
+          OPENBAO_SIGNATURE="$(jq -er '.signature' "$RESPONSE_JSON")"
+          KEY_VERSION="$(jq -er '.key_version' "$RESPONSE_JSON")"
+          REMOTE_MANIFEST_SHA256="$(jq -er '.manifest_sha256' "$RESPONSE_JSON")"
+          LOCAL_MANIFEST_SHA256="$(python3 - "$MANIFEST" <<'PY'
+          import hashlib
+          import json
+          import sys
           from pathlib import Path
 
-          def sha256_file(path: Path) -> str:
-              h = hashlib.sha256()
-              with path.open("rb") as f:
-                  for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                      h.update(chunk)
-              return h.hexdigest()
-
-          parts = []
-          for filename in sorted(glob.glob(os.environ["PREFIX"] + ".*.part")):
-              path = Path(filename)
-              parts.append({
-                  "name": path.as_posix(),
-                  "size_bytes": path.stat().st_size,
-                  "sha256": sha256_file(path),
-              })
-          if not parts:
-              raise SystemExit("No se generaron partes")
-
-          claims = json.loads(Path(os.environ["CLAIMS_JSON"]).read_text(encoding="utf-8"))
-          manifest = {
-              "schema_version": 4,
-              "backup_type": "full_logical_pg_dump_custom_age_encrypted_split_signed",
-              "created_at_utc": os.environ["CREATED_AT_UTC"],
-              "timestamp_madrid": os.environ["TIMESTAMP"],
-              "format": "pg_dump custom",
-              "plaintext_dump_sha256": os.environ["PLAINTEXT_SHA256"],
-              "encrypted_original_filename": os.environ["ENCRYPTED_TMP"],
-              "encrypted_sha256": os.environ["ENCRYPTED_SHA256"],
-              "parts_prefix": os.environ["PREFIX"],
-              "part_size": "90MiB",
-              "part_count": len(parts),
-              "parts": parts,
-              "sha256_file": os.environ["SHA_FILE"],
-              "encryption": {
-                  "format": "age",
-                  "recipient_sha256": os.environ["AGE_RECIPIENT_SHA256"],
-                  "private_key_location": "offline-not-in-github",
-              },
-              "signing": {
-                  "provider": "openbao-transit",
-                  "algorithm": "ed25519",
-                  "mount": "transit-backup",
-                  "key_name": "supabase-backup-manifest",
-                  "public_key_sha256": os.environ["BACKUP_SIGNING_PUBLIC_KEY_SHA256"],
-                  "signature_file": os.environ["SIGNATURE"],
-              },
-              "provenance": {
-                  "repository": claims["repository"],
-                  "repository_id": claims["repository_id"],
-                  "repository_owner_id": claims["repository_owner_id"],
-                  "workflow_ref": claims["workflow_ref"],
-                  "workflow_sha": claims["workflow_sha"],
-                  "job_workflow_ref": claims["job_workflow_ref"],
-                  "job_workflow_sha": claims["job_workflow_sha"],
-                  "ref": claims["ref"],
-                  "source_commit": claims["sha"],
-                  "run_id": claims["run_id"],
-                  "run_attempt": claims["run_attempt"],
-                  "event_name": claims["event_name"],
-                  "runner_environment": claims["runner_environment"],
-              },
-          }
-          Path(os.environ["MANIFEST"]).write_text(
-              json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-              encoding="utf-8",
-          )
+          value = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          canonical = json.dumps(
+              value,
+              sort_keys=True,
+              separators=(",", ":"),
+              ensure_ascii=False,
+          ).encode("utf-8")
+          print(hashlib.sha256(canonical).hexdigest())
           PY
+          )"
+          [ "$REMOTE_MANIFEST_SHA256" = "$LOCAL_MANIFEST_SHA256" ] || {
+            echo "::error::El firmador firmó un manifiesto con digest distinto."
+            exit 1
+          }
 
-          # OpenBao valida firma, issuer, audiencia, repositorio, workflow reutilizable,
-          # SHA inmutable del reusable workflow y runner self-hosted.
-          jq -n --arg role "$OPENBAO_AUTH_ROLE" --arg jwt "$OIDC_TOKEN" \
-            '{role:$role,jwt:$jwt}' > "$LOGIN_JSON"
-          curl --fail --silent --show-error \
-            -H 'Content-Type: application/json' \
-            --data-binary "@$LOGIN_JSON" \
-            "${OPENBAO_ADDR%/}/v1/auth/${OPENBAO_AUTH_MOUNT}/login" \
-            > "$SIGN_JSON.login"
-          OPENBAO_TOKEN="$(jq -er '.auth.client_token' "$SIGN_JSON.login")"
-          rm -f "$SIGN_JSON.login"
-
-          MANIFEST_B64="$(base64 -w 0 "$MANIFEST")"
-          jq -n --arg input "$MANIFEST_B64" '{input:$input}' > "$SIGN_JSON.request"
-          curl --fail --silent --show-error \
-            -H "X-Vault-Token: $OPENBAO_TOKEN" \
-            -H 'Content-Type: application/json' \
-            --data-binary "@$SIGN_JSON.request" \
-            "${OPENBAO_ADDR%/}/v1/${OPENBAO_TRANSIT_MOUNT}/sign/${OPENBAO_KEY_NAME}" \
-            > "$SIGN_JSON"
-          unset OPENBAO_TOKEN OIDC_TOKEN
-          rm -f "$SIGN_JSON.request"
-
-          OPENBAO_SIGNATURE="$(jq -er '.data.signature' "$SIGN_JSON")"
-          KEY_VERSION="$(printf '%s' "$OPENBAO_SIGNATURE" | sed -E 's/^[^:]+:v([0-9]+):.*/\1/')"
-          MANIFEST_SHA256="$(sha256sum "$MANIFEST" | awk '{print $1}')"
-          SIGNED_AT_UTC="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-
+          printf '%s\n' "$OPENBAO_SIGNATURE" > "$SIGNATURE"
           jq -n \
-            --arg signature "$OPENBAO_SIGNATURE" \
+            --arg signature_file "$SIGNATURE" \
+            --arg manifest_file "$MANIFEST" \
+            --arg manifest_sha256 "$LOCAL_MANIFEST_SHA256" \
+            --arg signed_at_utc "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
             --argjson key_version "$KEY_VERSION" \
-            --arg manifest_sha256 "$MANIFEST_SHA256" \
-            --arg public_key_sha256 "$BACKUP_SIGNING_PUBLIC_KEY_SHA256" \
-            --arg signed_at_utc "$SIGNED_AT_UTC" \
-            --slurpfile oidc "$CLAIMS_JSON" \
             '{
               schema_version:1,
-              provider:"openbao-transit",
+              provider:"backup-signer-openbao-transit",
               algorithm:"ed25519",
-              mount:"transit-backup",
-              key_name:"supabase-backup-manifest",
               key_version:$key_version,
-              signature:$signature,
+              manifest_file:$manifest_file,
+              signature_file:$signature_file,
               manifest_sha256:$manifest_sha256,
-              public_key_sha256:$public_key_sha256,
-              signed_at_utc:$signed_at_utc,
-              oidc:$oidc[0]
-            }' > "$SIGNATURE"
+              signed_at_utc:$signed_at_utc
+            }' > "$SIGNATURE_META"
 
-          python3 /tmp/backup-trusted/verify_backup_set.py \
-            --repo-root . \
+          python3 /tmp/backup-trusted/verify_backup_set.py --manifest "$MANIFEST"
+          python3 /tmp/backup-trusted/verify_signature.py \
             --public-key /tmp/backup-trusted/backup-signing-public-key.pem \
-            --expected-public-key-sha256 "$BACKUP_SIGNING_PUBLIC_KEY_SHA256" \
-            --new-manifest "$MANIFEST" \
-            --retain 30 \
-            --delete-old
+            --manifest "$MANIFEST" \
+            --signature "$SIGNATURE"
 
           rm -f "$RAW_DUMP" "$ENCRYPTED_TMP"
           COMPLETE=true
           echo "created=true" >> "$GITHUB_OUTPUT"
+
+      - name: Retain only the newest 30 verified backups
+        if: steps.duplicate.outputs.skip != 'true' && steps.backup.outputs.created == 'true'
+        run: |
+          set -euo pipefail
+          mapfile -t ALL_MANIFESTS < <(
+            find manifests -maxdepth 1 -type f -name 'database_backup_*.json' -printf '%f\n' \
+              | sort -r
+          )
+          if [ "${#ALL_MANIFESTS[@]}" -le 30 ]; then
+            exit 0
+          fi
+          for NAME in "${ALL_MANIFESTS[@]:30}"; do
+            MANIFEST="manifests/$NAME"
+            PREFIX="$(jq -er '.parts_prefix' "$MANIFEST")"
+            BASE="${NAME%.json}"
+            rm -f "$MANIFEST" "signatures/${BASE}.sig" "signatures/${BASE}.json" "${PREFIX}."*.part
+          done
 
       - name: Publish one-commit storage snapshot
         if: steps.duplicate.outputs.skip != 'true' && steps.backup.outputs.created == 'true'
@@ -410,7 +407,7 @@ jobs:
           git add -A encrypted_backups manifests signatures
           TREE="$(git write-tree)"
           COMMIT="$(printf '%s\n' \
-            "backup: signed snapshot ${{ steps.vars.outputs.CURRENT_DAY }} [skip ci]" \
+            'backup: signed snapshot ${{ steps.vars.outputs.CURRENT_DAY }} [skip ci]' \
             | git commit-tree "$TREE")"
           if [ -n "$REMOTE_SHA" ]; then
             git push \
