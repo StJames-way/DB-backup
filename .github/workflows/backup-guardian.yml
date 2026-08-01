@@ -1,0 +1,653 @@
+name: Backup Guardian
+
+# Guardian de seguridad y funcionamiento para StJames-way/DB-backup.
+#
+# - En pull requests y pushes valida contratos, scripts y herramientas sin
+#   tocar producción.
+# - Tras un push relevante a main ejecuta un backup canario real mediante el
+#   workflow oficial ya existente.
+# - Cada día comprueba que Supabase index.ts produjo recientemente un
+#   repository_dispatch correcto, sin copiar BACKUP_TRIGGER_SECRET a GitHub.
+
+on:
+  # Sin filtro de paths: este job será un status check obligatorio.
+  # Si GitHub omite el workflow por un filtro, el check quedaría Pending.
+  pull_request:
+    branches: [main]
+
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+      - "tools/backup/**"
+      - "config/**"
+      - "scripts/**"
+      - "restore_age_backup_complete.sh"
+      - "docs/**"
+
+  workflow_dispatch:
+    inputs:
+      production_canary:
+        description: "Ejecutar ahora un backup real forzado"
+        required: true
+        type: boolean
+        default: true
+      check_supabase_trigger:
+        description: "Comprobar el último repository_dispatch de Supabase"
+        required: true
+        type: boolean
+        default: true
+
+  schedule:
+    # Comprobación diaria posterior a la hora configurada en Supabase.
+    - cron: "17 5 * * *"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: backup-guardian-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TARGET_WORKFLOW: supabase-backup-dispatch.yml
+  STORAGE_BRANCH: backups-signed-latest-30
+  EXPECTED_AGE_RECIPIENT_SHA256: f59fd599322f109270cfa7fd614e38b8eb7d5ca823c0443f8f0d55651e4b31aa
+  EXPECTED_SIGNING_PUBLIC_KEY_SHA256: 4011dd69e227bfcf6f39b3f44b1ad499d2a582c9f3eed93d8896e61b7485ce96
+
+jobs:
+  static-contract:
+    name: Guardian / static contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: tools/backup/requirements.txt
+
+      - name: Install verification dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r tools/backup/requirements.txt
+
+      - name: Validate Python and shell syntax
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          from pathlib import Path
+
+          roots = ('tools/backup',)
+          checked = 0
+
+          for root_name in roots:
+              root = Path(root_name)
+              if not root.exists():
+                  continue
+              for path in sorted(root.rglob("*.py")):
+                  source = path.read_text(encoding="utf-8")
+                  compile(source, str(path), "exec")
+                  checked += 1
+
+          if checked == 0:
+              raise SystemExit("ERROR: no se encontraron archivos Python para validar")
+
+          print(f"OK: {checked} archivos Python tienen sintaxis válida")
+          PY
+
+          while IFS= read -r -d '' script; do
+            bash -n "$script"
+          done < <(
+            find . -type f -name '*.sh' -not -path './.git/*' -print0
+          )
+
+      - name: Reject private keys and committed generated Python files
+        run: |
+          set -euo pipefail
+
+          TRACKED_GENERATED="$(
+            git ls-files |
+              grep -E '(^|/)(__pycache__/|[^/]+\.py[co]$)' ||
+              true
+          )"
+
+          if [ -n "$TRACKED_GENERATED" ]; then
+            printf '%s\n' "$TRACKED_GENERATED"
+            echo "::error::Hay archivos Python generados versionados en Git."
+            exit 1
+          fi
+
+          if grep -RIl \
+              --exclude-dir=.git \
+              -E '^-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----$' \
+              .
+          then
+            echo "::error::Se encontró una posible clave privada."
+            exit 1
+          fi
+
+      - name: Validate immutable workflow and secret contract
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          from __future__ import annotations
+
+          import re
+          from pathlib import Path
+
+          caller_path = Path('.github/workflows/supabase-backup-dispatch.yml')
+          reusable_path = Path('.github/workflows/supabase-age-openbao-reusable.yml')
+
+          caller = caller_path.read_text(encoding='utf-8')
+          reusable = reusable_path.read_text(encoding='utf-8')
+          all_workflows = '\n'.join(
+              path.read_text(encoding='utf-8')
+              for path in sorted(Path('.github/workflows').glob('*.y*ml'))
+          )
+
+          required_caller_fragments = (
+              'repository_dispatch:',
+              'types: [supabase_backup_trigger]',
+              'workflow_dispatch:',
+              'backup_age_recipient:',
+              'backup_signer_url:',
+              'SUPABASE_DB_URL:',
+          )
+          for fragment in required_caller_fragments:
+              if fragment not in caller:
+                  raise SystemExit(f'ERROR: falta en caller: {fragment}')
+
+          if 'workflow_call:' not in reusable:
+              raise SystemExit('ERROR: el reusable no declara workflow_call')
+
+          match = re.search(
+              r'uses:\s*StJames-way/DB-backup/\.github/workflows/'
+              r'supabase-age-openbao-reusable\.yml@([0-9a-f]{40})',
+              caller,
+          )
+          if not match:
+              raise SystemExit(
+                  'ERROR: el caller no fija el reusable a un SHA completo'
+              )
+
+          pinned_sha = match.group(1)
+
+          if re.search(r'uses:\s*[^\s]+@(main|master|v?\d+(?:\.\d+)*)\s*$',
+                       all_workflows, re.MULTILINE):
+              raise SystemExit(
+                  'ERROR: existe una action o reusable fijado a rama/tag móvil'
+              )
+
+          remote_uses = re.findall(
+              r'^\s*uses:\s*([^\s#]+)', all_workflows, re.MULTILINE
+          )
+          for value in remote_uses:
+              if value.startswith('./'):
+                  continue
+              if not re.search(r'@[0-9a-f]{40}$', value):
+                  raise SystemExit(
+                      f'ERROR: uses no inmutable: {value}'
+                  )
+
+          forbidden = (
+              'OPENBAO_ROLE_ID',
+              'OPENBAO_SECRET_ID',
+              'FLY_API_TOKEN',
+              'BAO_TOKEN',
+              'VAULT_TOKEN',
+              'AGE_SECRET_KEY',
+              'AGE_PRIVATE_KEY',
+          )
+          for name in forbidden:
+              if name in all_workflows:
+                  raise SystemExit(
+                      f'ERROR: credencial prohibida en workflows: {name}'
+                  )
+
+          referenced_secrets = set(
+              re.findall(r'secrets\.([A-Z0-9_]+)', all_workflows)
+          )
+          allowed_secrets = {'SUPABASE_DB_URL', 'GITHUB_TOKEN'}
+          unexpected = referenced_secrets - allowed_secrets
+          if unexpected:
+              raise SystemExit(
+                  'ERROR: secretos inesperados en workflows: '
+                  + ', '.join(sorted(unexpected))
+              )
+
+          expected_values = (
+              'daily_full_age_encrypted_openbao_signed_retain_last_30_verified',
+              'https://camino-backup-signer.fly.dev',
+              'openbao://supabase-backup-signing',
+              'f59fd599322f109270cfa7fd614e38b8eb7d5ca823c0443f8f0d55651e4b31aa',
+              '4011dd69e227bfcf6f39b3f44b1ad499d2a582c9f3eed93d8896e61b7485ce96',
+          )
+          for value in expected_values:
+              if value not in reusable and value not in caller:
+                  raise SystemExit(f'ERROR: falta contrato esperado: {value}')
+
+          if 'dispatch_format_version' not in caller or '5' not in caller:
+              raise SystemExit('ERROR: el caller no declara formato v5')
+
+          print('OK: contrato estático validado')
+          print(f'Reusable fijado a: {pinned_sha}')
+          PY
+
+      - name: Validate public signing key fingerprint
+        run: |
+          set -euo pipefail
+
+          openssl pkey \
+            -pubin \
+            -in config/backup-signing-public-key.pem \
+            -noout
+
+          ACTUAL="$({
+            openssl pkey \
+              -pubin \
+              -in config/backup-signing-public-key.pem \
+              -outform DER
+          } | sha256sum | awk '{print $1}')"
+
+          test "$ACTUAL" = "$EXPECTED_SIGNING_PUBLIC_KEY_SHA256" || {
+            echo "::error::La clave pública no coincide con la huella aprobada."
+            exit 1
+          }
+
+      - name: Run deterministic backup-tool self-test
+        run: |
+          set -euo pipefail
+          umask 077
+
+          TMP_TEST="$(mktemp -d)"
+          trap 'rm -rf "$TMP_TEST"' EXIT INT TERM
+
+          mkdir -p "$TMP_TEST/encrypted_backups"
+          printf 'parte-uno' > "$TMP_TEST/encrypted_backups/ci.dump.age.000.part"
+          printf 'parte-dos' > "$TMP_TEST/encrypted_backups/ci.dump.age.001.part"
+
+          cd "$TMP_TEST"
+
+          python "$GITHUB_WORKSPACE/tools/backup/build_manifest.py" \
+            --parts-glob 'encrypted_backups/ci.dump.age.*.part' \
+            --plaintext-sha256 "$(printf plaintext | sha256sum | awk '{print $1}')" \
+            --encrypted-sha256 "$(printf encrypted | sha256sum | awk '{print $1}')" \
+            --age-recipient-sha256 "$EXPECTED_AGE_RECIPIENT_SHA256" \
+            --created-at-utc '2026-01-01T00:00:00Z' \
+            --timestamp-madrid '2026-01-01_01-00-00' \
+            --repository 'StJames-way/DB-backup' \
+            --workflow-ref 'StJames-way/DB-backup/.github/workflows/supabase-backup-dispatch.yml@refs/heads/main' \
+            --workflow-sha '1111111111111111111111111111111111111111' \
+            --run-id '1' \
+            --run-attempt '1' \
+            --output manifest.json
+
+          python "$GITHUB_WORKSPACE/tools/backup/verify_backup_set.py" \
+            --manifest manifest.json
+
+          python - <<'PY'
+          import base64
+          import json
+          from pathlib import Path
+
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+              Ed25519PrivateKey,
+          )
+          from cryptography.hazmat.primitives.serialization import (
+              Encoding,
+              PublicFormat,
+          )
+
+          manifest = json.loads(Path('manifest.json').read_text(encoding='utf-8'))
+          canonical = json.dumps(
+              manifest,
+              sort_keys=True,
+              separators=(',', ':'),
+              ensure_ascii=False,
+          ).encode('utf-8')
+
+          private_key = Ed25519PrivateKey.generate()
+          public_key = private_key.public_key()
+          signature = private_key.sign(canonical)
+
+          Path('public.pem').write_bytes(
+              public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+          )
+          Path('signature.sig').write_text(
+              'vault:v1:' + base64.b64encode(signature).decode('ascii') + '\n',
+              encoding='utf-8',
+          )
+          PY
+
+          python "$GITHUB_WORKSPACE/tools/backup/verify_signature.py" \
+            --public-key public.pem \
+            --manifest manifest.json \
+            --signature signature.sig
+
+          printf 'alteración' >> encrypted_backups/ci.dump.age.000.part
+          if python "$GITHUB_WORKSPACE/tools/backup/verify_backup_set.py" \
+              --manifest manifest.json
+          then
+            echo "::error::El verificador aceptó una parte alterada."
+            exit 1
+          fi
+
+          echo 'OK: el test positivo pasa y el test de alteración falla.'
+
+  production-canary:
+    name: Guardian / production canary
+    needs: static-contract
+    if: >-
+      ${{
+        github.event_name == 'push' ||
+        (github.event_name == 'workflow_dispatch' && inputs.production_canary)
+      }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 140
+
+    permissions:
+      contents: read
+      actions: write
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout verification tools
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+
+      - name: Set up Python for cryptographic verification
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: tools/backup/requirements.txt
+
+      - name: Capture baseline and trigger official backup workflow
+        id: trigger
+        run: |
+          set -euo pipefail
+
+          command -v gh >/dev/null
+          command -v jq >/dev/null
+
+          STARTED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          MAIN_SHA="$(
+            gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq '.sha'
+          )"
+          BEFORE_STORAGE_SHA="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/git/ref/heads/${STORAGE_BRANCH}" \
+              --jq '.object.sha'
+          )"
+
+          printf '%s\n' "$STARTED_AT" > /tmp/guardian-started-at
+          printf '%s\n' "$BEFORE_STORAGE_SHA" > /tmp/guardian-before-storage-sha
+
+          gh workflow run "$TARGET_WORKFLOW" \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            --field force=true
+
+          RUN_ID=""
+          for ((attempt = 1; attempt <= 80; attempt += 1)); do
+            RUN_ID="$(
+              gh run list \
+                --repo "$GITHUB_REPOSITORY" \
+                --workflow "$TARGET_WORKFLOW" \
+                --event workflow_dispatch \
+                --branch main \
+                --limit 30 \
+                --json databaseId,createdAt,headSha \
+              | jq -r \
+                  --arg started "$STARTED_AT" \
+                  --arg sha "$MAIN_SHA" \
+                  '[
+                     .[]
+                     | select(.createdAt >= $started)
+                     | select(.headSha == $sha)
+                   ]
+                   | sort_by(.createdAt)
+                   | last
+                   | .databaseId // empty'
+            )"
+
+            if [ -n "$RUN_ID" ]; then
+              break
+            fi
+            sleep 3
+          done
+
+          test -n "$RUN_ID" || {
+            echo "::error::No apareció el workflow_dispatch canario."
+            exit 1
+          }
+
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "Canary run_id=$RUN_ID"
+
+      - name: Wait for the complete cryptographic backup
+        run: |
+          set -euo pipefail
+
+          gh run watch "${{ steps.trigger.outputs.run_id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --exit-status
+
+          gh run view "${{ steps.trigger.outputs.run_id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json event,status,conclusion,url,jobs \
+            > /tmp/guardian-run.json
+
+          jq '{event,status,conclusion,url}' /tmp/guardian-run.json
+
+          jq -e '
+            .event == "workflow_dispatch"
+            and .status == "completed"
+            and .conclusion == "success"
+          ' /tmp/guardian-run.json >/dev/null
+
+          for step in \
+            'Validate trigger and configuration' \
+            'Create, encrypt, sign and verify backup' \
+            'Publish one-commit storage snapshot'
+          do
+            jq -e \
+              --arg step "$step" \
+              '[
+                 .jobs[].steps[]
+                 | select(.name == $step and .conclusion == "success")
+               ] | length >= 1' \
+              /tmp/guardian-run.json >/dev/null || {
+                echo "::error::No consta correcto el paso: $step"
+                exit 1
+              }
+          done
+
+      - name: Verify published commit, manifest, signature and parts
+        run: |
+          set -euo pipefail
+          umask 077
+
+          RUN_ID="${{ steps.trigger.outputs.run_id }}"
+          BEFORE_STORAGE_SHA="$(cat /tmp/guardian-before-storage-sha)"
+          AFTER_STORAGE_SHA="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/git/ref/heads/${STORAGE_BRANCH}" \
+              --jq '.object.sha'
+          )"
+
+          test "$AFTER_STORAGE_SHA" != "$BEFORE_STORAGE_SHA" || {
+            echo "::error::El canario no creó un commit nuevo de almacenamiento."
+            exit 1
+          }
+
+          TMP_VERIFY="$(mktemp -d)"
+          trap 'rm -rf "$TMP_VERIFY"' EXIT INT TERM
+
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/contents/manifests?ref=${STORAGE_BRANCH}" \
+            --jq '.[].name' \
+            | sort -r \
+            > "$TMP_VERIFY/manifests.txt"
+
+          MANIFEST_NAME=""
+          while IFS= read -r candidate; do
+            [ -n "$candidate" ] || continue
+
+            gh api \
+              -H 'Accept: application/vnd.github.raw+json' \
+              "repos/${GITHUB_REPOSITORY}/contents/manifests/${candidate}?ref=${STORAGE_BRANCH}" \
+              > "$TMP_VERIFY/manifest.json"
+
+            if [ "$(jq -r '.provenance.run_id // ""' "$TMP_VERIFY/manifest.json")" = "$RUN_ID" ]; then
+              MANIFEST_NAME="$candidate"
+              break
+            fi
+          done < "$TMP_VERIFY/manifests.txt"
+
+          test -n "$MANIFEST_NAME" || {
+            echo "::error::No existe manifiesto asociado al run_id=$RUN_ID."
+            exit 1
+          }
+
+          jq -e \
+            --arg run "$RUN_ID" \
+            --arg age "$EXPECTED_AGE_RECIPIENT_SHA256" '
+              .schema_version == 5
+              and .provenance.run_id == $run
+              and .provenance.repository == "StJames-way/DB-backup"
+              and .encryption.algorithm == "age"
+              and .encryption.age_recipient_sha256 == $age
+              and (.part_count | type == "number" and . > 0)
+              and .part_count == (.parts | length)
+            ' "$TMP_VERIFY/manifest.json" >/dev/null
+
+          BASE="${MANIFEST_NAME%.json}"
+
+          gh api \
+            -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${GITHUB_REPOSITORY}/contents/signatures/${BASE}.sig?ref=${STORAGE_BRANCH}" \
+            > "$TMP_VERIFY/signature.sig"
+
+          gh api \
+            -H 'Accept: application/vnd.github.raw+json' \
+            "repos/${GITHUB_REPOSITORY}/contents/signatures/${BASE}.json?ref=${STORAGE_BRANCH}" \
+            > "$TMP_VERIFY/signature-meta.json"
+
+          jq -e '
+            .provider == "backup-signer-openbao-transit"
+            and .algorithm == "ed25519"
+            and (.key_version | type == "number" and . >= 1)
+          ' "$TMP_VERIFY/signature-meta.json" >/dev/null
+
+          python -m pip install -r tools/backup/requirements.txt
+          python tools/backup/verify_signature.py \
+            --public-key config/backup-signing-public-key.pem \
+            --manifest "$TMP_VERIFY/manifest.json" \
+            --signature "$TMP_VERIFY/signature.sig"
+
+          FAILURES=0
+          while IFS=$'\t' read -r part_name expected_size; do
+            actual_size="$(
+              gh api \
+                "repos/${GITHUB_REPOSITORY}/contents/${part_name}?ref=${STORAGE_BRANCH}" \
+                --jq '.size' \
+              || true
+            )"
+
+            if [ -z "$actual_size" ] || [ "$actual_size" != "$expected_size" ]; then
+              echo "::error::Parte ausente o con tamaño incorrecto: $part_name"
+              FAILURES=$((FAILURES + 1))
+            fi
+          done < <(
+            jq -r '.parts[] | [.name, (.size_bytes | tostring)] | @tsv' \
+              "$TMP_VERIFY/manifest.json"
+          )
+
+          test "$FAILURES" -eq 0
+
+          echo "storage_sha=$AFTER_STORAGE_SHA" >> "$GITHUB_STEP_SUMMARY"
+          echo "manifest=$MANIFEST_NAME" >> "$GITHUB_STEP_SUMMARY"
+          echo "run_id=$RUN_ID" >> "$GITHUB_STEP_SUMMARY"
+
+  supabase-trigger-monitor:
+    name: Guardian / Supabase trigger monitor
+    needs: static-contract
+    if: >-
+      ${{
+        github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_dispatch' && inputs.check_supabase_trigger)
+      }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+      actions: read
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Verify recent successful repository_dispatch
+        run: |
+          set -euo pipefail
+
+          gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow "$TARGET_WORKFLOW" \
+            --event repository_dispatch \
+            --branch main \
+            --limit 20 \
+            --json databaseId,createdAt,status,conclusion,url \
+            > /tmp/repository-dispatch-runs.json
+
+          python - <<'PY'
+          from __future__ import annotations
+
+          import datetime as dt
+          import json
+          from pathlib import Path
+
+          runs = json.loads(
+              Path('/tmp/repository-dispatch-runs.json').read_text(encoding='utf-8')
+          )
+          if not runs:
+              raise SystemExit('ERROR: no existe ningún repository_dispatch')
+
+          latest = max(runs, key=lambda item: item['createdAt'])
+          created = dt.datetime.fromisoformat(
+              latest['createdAt'].replace('Z', '+00:00')
+          )
+          age = dt.datetime.now(dt.timezone.utc) - created
+
+          if age > dt.timedelta(hours=36):
+              raise SystemExit(
+                  f'ERROR: el último repository_dispatch tiene {age} de antigüedad'
+              )
+          if latest['status'] != 'completed' or latest['conclusion'] != 'success':
+              raise SystemExit(
+                  'ERROR: el último repository_dispatch no terminó correctamente: '
+                  + json.dumps(latest, sort_keys=True)
+              )
+
+          print(json.dumps(latest, indent=2, sort_keys=True))
+          print('OK: Supabase index.ts disparó correctamente en las últimas 36 horas')
+          PY
