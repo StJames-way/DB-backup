@@ -205,7 +205,7 @@ jobs:
                       f'ERROR: uses no inmutable: {value}'
                   )
 
-          forbidden = (
+          forbidden = {
               'OPENBAO_ROLE_ID',
               'OPENBAO_SECRET_ID',
               'FLY_API_TOKEN',
@@ -213,16 +213,21 @@ jobs:
               'VAULT_TOKEN',
               'AGE_SECRET_KEY',
               'AGE_PRIVATE_KEY',
-          )
-          for name in forbidden:
-              if name in all_workflows:
-                  raise SystemExit(
-                      f'ERROR: credencial prohibida en workflows: {name}'
-                  )
+          }
 
+          # Buscar referencias reales a GitHub Actions secrets. No buscar el
+          # nombre como texto bruto: este propio validador contiene los nombres
+          # prohibidos en la lista anterior y se bloquearía a sí mismo.
           referenced_secrets = set(
-              re.findall(r'secrets\.([A-Z0-9_]+)', all_workflows)
+              re.findall(r'\bsecrets\.([A-Z0-9_]+)\b', all_workflows)
           )
+
+          forbidden_references = referenced_secrets & forbidden
+          if forbidden_references:
+              raise SystemExit(
+                  'ERROR: credenciales prohibidas referenciadas en workflows: '
+                  + ', '.join(sorted(forbidden_references))
+              )
           allowed_secrets = {'SUPABASE_DB_URL', 'GITHUB_TOKEN'}
           unexpected = referenced_secrets - allowed_secrets
           if unexpected:
