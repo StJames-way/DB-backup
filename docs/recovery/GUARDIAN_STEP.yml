@@ -1,0 +1,4 @@
+# Añadir dentro del job estático de Backup Guardian.
+- name: Validate public recovery trust contract
+  run: |
+    python3 tools/backup/validate_recovery_trust.py
