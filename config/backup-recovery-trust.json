@@ -1,0 +1,17 @@
+{
+  "policy_version": 1,
+  "public_data_only": true,
+  "manifest_schema_version": 5,
+  "backup_type": "full_logical_pg_dump_custom_age_encrypted_split_signed",
+  "encryption": {
+    "algorithm": "age",
+    "approved_recipient": "age18gt5e7d48tfyhx4552kc5wyp52lt5rf34ag0sat3t4xsrg0fqg8stagvae",
+    "approved_recipient_sha256": "f59fd599322f109270cfa7fd614e38b8eb7d5ca823c0443f8f0d55651e4b31aa",
+    "sha256_input": "UTF-8 bytes of approved_recipient without trailing newline"
+  },
+  "signature": {
+    "algorithm": "ed25519",
+    "provider": "backup-signer-openbao-transit",
+    "public_key_sha256_der": "4011dd69e227bfcf6f39b3f44b1ad499d2a582c9f3eed93d8896e61b7485ce96"
+  }
+}

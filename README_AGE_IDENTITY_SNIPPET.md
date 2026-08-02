@@ -1,6 +1,3 @@
-
-Guardian ruleset test.
-
 ## Identidad age aprobada
 
 La identidad privada no está en el repositorio. El contrato público está en:
