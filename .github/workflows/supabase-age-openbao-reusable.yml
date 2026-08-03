@@ -49,6 +49,7 @@ jobs:
       BACKUP_SIGNER_URL: ${{ inputs.backup_signer_url }}
       EXPECTED_AGE_RECIPIENT_SHA256: f59fd599322f109270cfa7fd614e38b8eb7d5ca823c0443f8f0d55651e4b31aa
       BACKUP_SIGNING_PUBLIC_KEY_SHA256: 4011dd69e227bfcf6f39b3f44b1ad499d2a582c9f3eed93d8896e61b7485ce96
+      SUPABASE_CA_CERT_SHA256: 807025ad50d4ed219d2c9c7d299c004f824eb00cf7f65afef607d07b72e6cafa
       # Fail-closed migration marker. Run tools/backup/configure_gateway_url.py
       # after Cloudflare deploy; it replaces this with the SHA-256 of the
       # normalized Worker URL without storing the URL itself in the workflow.
@@ -70,6 +71,7 @@ jobs:
           sparse-checkout: |
             tools/backup
             config/backup-signing-public-key.pem
+            config/prod-ca-2021.crt
 
       - name: Prepare immutable trusted tools
         run: |
@@ -79,6 +81,7 @@ jobs:
           install -m 0500 .trusted-workflow/tools/backup/verify_backup_set.py /tmp/backup-trusted/
           install -m 0500 .trusted-workflow/tools/backup/verify_signature.py /tmp/backup-trusted/
           install -m 0400 .trusted-workflow/config/backup-signing-public-key.pem /tmp/backup-trusted/
+          install -m 0444 .trusted-workflow/config/prod-ca-2021.crt /tmp/backup-trusted/prod-ca-2021.crt
           openssl pkey -pubin -in /tmp/backup-trusted/backup-signing-public-key.pem -noout
           ACTUAL_KEY_SHA256="$(
             openssl pkey \
@@ -176,6 +179,9 @@ jobs:
         env:
           DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           BACKUP_AGE_RECIPIENT: ${{ inputs.backup_age_recipient }}
+          PGSSLMODE: verify-full
+          PGSSLROOTCERT: /tmp/backup-trusted/prod-ca-2021.crt
+          PGAPPNAME: github-actions-supabase-backup-validate
         run: |
           set -euo pipefail
           [ "$GITHUB_REF" = "refs/heads/main" ] || {
@@ -187,6 +193,33 @@ jobs:
             postgres://*|postgresql://*) ;;
             *) echo "::error::SUPABASE_DB_URL no parece PostgreSQL."; exit 1 ;;
           esac
+          test -s "$PGSSLROOTCERT" || {
+            echo "::error::Falta el certificado CA de Supabase."
+            exit 1
+          }
+          ACTUAL_SUPABASE_CA_SHA256="$(
+            openssl x509 -in "$PGSSLROOTCERT" -outform DER |
+              sha256sum |
+              awk '{print $1}'
+          )"
+          [ "$ACTUAL_SUPABASE_CA_SHA256" = "$SUPABASE_CA_CERT_SHA256" ] || {
+            echo "::error::La CA de Supabase no coincide con la huella aprobada."
+            exit 1
+          }
+          DB_URL="$DB_URL" python3 <<'PY'
+          import os
+          from urllib.parse import parse_qs, urlsplit
+
+          url = urlsplit(os.environ["DB_URL"])
+          params = parse_qs(url.query, keep_blank_values=True)
+          sslmodes = params.get("sslmode", [])
+
+          if sslmodes != ["verify-full"]:
+              raise SystemExit(
+                  "::error::SUPABASE_DB_URL debe exigir "
+                  "sslmode=verify-full exactamente una vez."
+              )
+          PY
           [ -n "$BACKUP_AGE_RECIPIENT" ] || {
             echo "::error::Falta BACKUP_AGE_RECIPIENT."
             exit 1
@@ -279,6 +312,9 @@ jobs:
         if: steps.duplicate.outputs.skip != 'true'
         env:
           DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          PGSSLMODE: verify-full
+          PGSSLROOTCERT: /tmp/backup-trusted/prod-ca-2021.crt
+          PGAPPNAME: github-actions-supabase-backup
           BACKUP_AGE_RECIPIENT: ${{ inputs.backup_age_recipient }}
           AGE_RECIPIENT_SHA256: ${{ steps.validate.outputs.AGE_RECIPIENT_SHA256 }}
           TIMESTAMP: ${{ steps.vars.outputs.TIMESTAMP }}
@@ -322,6 +358,21 @@ jobs:
               --command 'SHOW server_version_num' |
             tr -d '[:space:]'
           )"
+
+          SSL_ENABLED="$(
+            psql "$DB_URL" \
+              --no-psqlrc \
+              --no-align \
+              --tuples-only \
+              --command \
+                'SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid();' |
+              tr -d '[:space:]'
+          )"
+
+          [ "$SSL_ENABLED" = "t" ] || {
+            echo "::error::La conexión con Supabase no utiliza TLS."
+            exit 1
+          }
 
           [[ "$CLIENT_MAJOR" =~ ^[0-9]+$ ]] || {
             echo "::error::No se pudo determinar la versión mayor de pg_dump."

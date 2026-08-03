@@ -237,6 +237,16 @@ jobs:
               )
 
           expected_values = (
+
+              'SUPABASE_CA_CERT_SHA256',
+
+              'PGSSLROOTCERT',
+
+              'sslmodes != ["verify-full"]',
+
+              'pg_stat_ssl',
+
+              'config/prod-ca-2021.crt',
               'daily_full_age_encrypted_openbao_signed_retain_last_30_verified',
               'EXPECTED_BACKUP_GATEWAY_URL_SHA256:',
               'openbao://supabase-backup-signing',
