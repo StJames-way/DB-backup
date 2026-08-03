@@ -519,4 +519,4 @@ jobs:
               origin "$COMMIT:refs/heads/$BACKUP_STORAGE_BRANCH"
           else
             git push origin "$COMMIT:refs/heads/$BACKUP_STORAGE_BRANCH"
-          fi%
+          fi
