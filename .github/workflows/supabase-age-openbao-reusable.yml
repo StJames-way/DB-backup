@@ -49,7 +49,10 @@ jobs:
       BACKUP_SIGNER_URL: ${{ inputs.backup_signer_url }}
       EXPECTED_AGE_RECIPIENT_SHA256: f59fd599322f109270cfa7fd614e38b8eb7d5ca823c0443f8f0d55651e4b31aa
       BACKUP_SIGNING_PUBLIC_KEY_SHA256: 4011dd69e227bfcf6f39b3f44b1ad499d2a582c9f3eed93d8896e61b7485ce96
-      EXPECTED_BACKUP_SIGNER_URL: https://camino-backup-signer.fly.dev
+      # Fail-closed migration marker. Run tools/backup/configure_gateway_url.py
+      # after Cloudflare deploy; it replaces this with the SHA-256 of the
+      # normalized Worker URL without storing the URL itself in the workflow.
+      EXPECTED_BACKUP_GATEWAY_URL_SHA256: b8863d62b3e1202b604de3b499b9e4e99751259c68e4a706b72c0a98e6c35553
 
     steps:
       - name: Checkout caller repository
@@ -192,8 +195,15 @@ jobs:
             https://*) ;;
             *) echo "::error::BACKUP_SIGNER_URL debe usar HTTPS."; exit 1 ;;
           esac
-          [ "${BACKUP_SIGNER_URL%/}" = "$EXPECTED_BACKUP_SIGNER_URL" ] || {
-            echo "::error::BACKUP_SIGNER_URL no coincide con el firmador aprobado."
+          [ "$EXPECTED_BACKUP_GATEWAY_URL_SHA256" != "$(printf '0%.0s' {1..64})" ] || {
+            echo "::error::Configura la URL del gateway con tools/backup/configure_gateway_url.py."
+            exit 1
+          }
+          ACTUAL_GATEWAY_URL_SHA256="$(
+            printf '%s' "${BACKUP_SIGNER_URL%/}" | sha256sum | awk '{print $1}'
+          )"
+          [ "$ACTUAL_GATEWAY_URL_SHA256" = "$EXPECTED_BACKUP_GATEWAY_URL_SHA256" ] || {
+            echo "::error::BACKUP_SIGNER_URL no coincide con el gateway Cloudflare aprobado."
             exit 1
           }
           printf 'recipient-test' | age -e -r "$BACKUP_AGE_RECIPIENT" -o /tmp/age-test.age
@@ -509,4 +519,4 @@ jobs:
               origin "$COMMIT:refs/heads/$BACKUP_STORAGE_BRANCH"
           else
             git push origin "$COMMIT:refs/heads/$BACKUP_STORAGE_BRANCH"
-          fi
+          fi%
