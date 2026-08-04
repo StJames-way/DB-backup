@@ -22,7 +22,12 @@ def main() -> int:
     args = parser.parse_args()
 
     document = json.loads(args.manifest.read_text(encoding="utf-8"))
-    expected = document.get("plaintext_dump_sha256")
+    encryption = document.get("encryption")
+    if not isinstance(encryption, dict):
+        raise SystemExit("El manifiesto no contiene encryption")
+    expected = encryption.get("plaintext_sha256")
+    if not isinstance(expected, str):
+        raise SystemExit("El manifiesto no contiene encryption.plaintext_sha256")
     actual = sha256_file(args.dump)
     if actual != expected:
         raise SystemExit(f"SHA-256 del dump incorrecto: esperado {expected}, obtenido {actual}")

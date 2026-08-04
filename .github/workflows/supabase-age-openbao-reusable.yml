@@ -78,6 +78,7 @@ jobs:
           set -euo pipefail
           install -d -m 0700 /tmp/backup-trusted
           install -m 0500 .trusted-workflow/tools/backup/build_manifest.py /tmp/backup-trusted/
+          install -m 0500 .trusted-workflow/tools/backup/create_validated_dump.py /tmp/backup-trusted/
           install -m 0500 .trusted-workflow/tools/backup/verify_backup_set.py /tmp/backup-trusted/
           install -m 0500 .trusted-workflow/tools/backup/verify_signature.py /tmp/backup-trusted/
           install -m 0400 .trusted-workflow/config/backup-signing-public-key.pem /tmp/backup-trusted/
@@ -106,7 +107,8 @@ jobs:
             age \
             ca-certificates \
             curl \
-            python3-cryptography
+            python3-cryptography \
+            python3-psycopg2
 
           # Ubuntu 24.04 incluye PostgreSQL 16. El servidor Supabase usa
           # PostgreSQL 17, así que instalamos explícitamente el cliente 17
@@ -159,6 +161,8 @@ jobs:
           done
 
           python3 -c 'import cryptography'
+          python3 -c 'import psycopg2'
+          python3 /tmp/backup-trusted/create_validated_dump.py --self-test
 
           pg_dump --version
           pg_restore --version
@@ -326,6 +330,7 @@ jobs:
 
           BASE="database_backup_${TIMESTAMP}"
           RAW_DUMP="${BASE}.dump"
+          VALIDATION_REPORT="${BASE}.validation.json"
           ENCRYPTED_TMP="${BASE}.dump.age"
           PREFIX="encrypted_backups/${BASE}.dump.age"
           MANIFEST="manifests/${BASE}.json"
@@ -338,7 +343,7 @@ jobs:
           COMPLETE=false
 
           cleanup() {
-            rm -f "$RAW_DUMP" "$ENCRYPTED_TMP" "$OIDC_JSON" "$CLAIMS_JSON" "$REQUEST_JSON" "$RESPONSE_JSON"
+            rm -f "$RAW_DUMP" "$VALIDATION_REPORT" "$ENCRYPTED_TMP" "$OIDC_JSON" "$CLAIMS_JSON" "$REQUEST_JSON" "$RESPONSE_JSON"
             unset OIDC_TOKEN || true
             if [ "$COMPLETE" != "true" ]; then
               rm -f "$MANIFEST" "$SIGNATURE" "$SIGNATURE_META" "${PREFIX}."*.part
@@ -393,13 +398,43 @@ jobs:
             exit 1
           fi
 
-          pg_dump "$DB_URL" \
-            --format=custom \
-            --blobs \
-            --no-owner \
-            --no-privileges \
-            --file "$RAW_DUMP"
+          python3 /tmp/backup-trusted/create_validated_dump.py \
+            --db-url "$DB_URL" \
+            --output "$RAW_DUMP" \
+            --report "$VALIDATION_REPORT" \
+            --required-table public.pois \
+            --required-table public.pois_final \
+            --required-table public.pois_import \
+            --required-table public.legendary_pois \
+            --required-table public.pois_backup_before_fountain_dedupe \
+            --required-table public.legendary_poi_source_links \
+            --required-table public.stage_elevation_profiles \
+            --required-table public.poi_restaurant_details \
+            --required-table public.poi_tourism_details \
+            --required-table public.safety_zones \
+            --required-table public.mobility_pois \
+            --required-table public.spatial_ref_sys \
+            --required-table public.poi_public_service_details \
+            --required-table public.poi_fountain_details \
+            --required-table public.poi_health_details \
+            --required-table public.poi_religious_details \
+            --required-table public.nautical_pois \
+            --required-table public.legendary_poi_translations \
+            --required-table public.beaches \
+            --required-table public.nautical_route_pois \
+            --required-table auth.users \
+            --required-table storage.objects \
+            --required-table supabase_migrations.schema_migrations
+
           test -s "$RAW_DUMP"
+          test -s "$VALIDATION_REPORT"
+          jq -e '.status == "validated"' "$VALIDATION_REPORT" >/dev/null
+          {
+            echo '### Validación del contenido del pg_dump'
+            echo '```json'
+            cat "$VALIDATION_REPORT"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
           PLAINTEXT_SHA256="$(sha256sum "$RAW_DUMP" | awk '{print $1}')"
 
           age -e -r "$BACKUP_AGE_RECIPIENT" -o "$ENCRYPTED_TMP" "$RAW_DUMP"
@@ -531,7 +566,7 @@ jobs:
             --manifest "$MANIFEST" \
             --signature "$SIGNATURE"
 
-          rm -f "$RAW_DUMP" "$ENCRYPTED_TMP"
+          rm -f "$RAW_DUMP" "$VALIDATION_REPORT" "$ENCRYPTED_TMP"
           COMPLETE=true
           echo "created=true" >> "$GITHUB_OUTPUT"
 
