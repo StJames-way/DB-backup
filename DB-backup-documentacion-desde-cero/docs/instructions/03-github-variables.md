@@ -1,98 +1,100 @@
-# Variables de GitHub de `StJames-way/DB-backup`
+# Variables, secretos y trust anchors
 
-## La diferencia entre variable y secreto
+## GitHub Actions
 
-- Una **variable** contiene información pública o de configuración.
-- Un **secreto** contiene algo que permite entrar o hacer daño si se roba.
+### Variables
 
-En `DB-backup`, el único secreto que necesita el workflow es:
+```text
+BACKUP_AGE_RECIPIENT=age18gt5e7d48tfyhx4552kc5wyp52lt5rf34ag0sat3t4xsrg0fqg8stagvae
+BACKUP_SIGNER_URL=https://camino-backup-gateway.santiago-way.workers.dev
+```
+
+### Secret
 
 ```text
 SUPABASE_DB_URL
 ```
 
-No se escribe en ningún archivo. Se guarda en:
+No necesita secretos de OpenBao ni Cloudflare.
+
+## Worker
+
+### Variables no secretas
 
 ```text
-DB-backup → Settings → Secrets and variables → Actions → Secrets
+GITHUB_OIDC_AUDIENCE=openbao://supabase-backup-signing
+JWT_LEEWAY_SECONDS=30
+ALLOWED_REPOSITORY=StJames-way/DB-backup
+ALLOWED_REPOSITORY_ID=1283131929
+ALLOWED_REPOSITORY_OWNER_ID=297665544
+ALLOWED_REF=refs/heads/main
+ALLOWED_CALLER_WORKFLOW_REF=StJames-way/DB-backup/.github/workflows/supabase-backup-dispatch.yml@refs/heads/main
+ALLOWED_JOB_WORKFLOW_REF=StJames-way/DB-backup/.github/workflows/supabase-age-openbao-reusable.yml@9c1562857b371396e478fe078dd1ace772a93abc
+ALLOWED_JOB_WORKFLOW_SHA=9c1562857b371396e478fe078dd1ace772a93abc
+ALLOWED_EVENTS=workflow_dispatch,repository_dispatch
 ```
 
-## Tabla completa de las variables que tienes ahora
-
-| Variable | Valor actual | De dónde sale | ¿La lee hoy el workflow? | Qué pasa si la cambias solo en GitHub |
-|---|---|---|---|---|
-| `BACKUP_AGE_RECIPIENT` | `age18gt5e7d48tfyhx4552kc5wyp52lt5rf34ag0sat3t4xsrg0fqg8stagvae` | Es la parte pública obtenida con `age-keygen -y` desde la identidad privada offline | **Sí**. El caller la pasa al reusable | Cambia el recipient que intenta usar el workflow, pero fallará si no actualizas también la huella esperada y Supabase |
-| `BACKUP_ALLOWED_REF` | `refs/heads/main` | Es la rama autorizada. Debe coincidir con `ALLOWED_REF` de `backup-signer/fly.toml` | **No** en los workflows actuales; es una copia de control | No cambia el comportamiento real |
-| `BACKUP_DISPATCH_SOURCE` | `supabase-edge-function` | Es el nombre que envía `docs/supabase/index.ts` en el payload | **No** como variable de repo; el valor llega en el payload y se valida en el reusable | No cambia el comportamiento real |
-| `BACKUP_FORMAT_VERSION` | `5` | Es la versión del contrato del manifiesto y del payload | **No** como variable de repo; está validada en Edge Function, caller y reusable | No cambia el comportamiento real |
-| `BACKUP_PART_SIZE_BYTES` | `94371840` | `90 × 1024 × 1024`; son 90 MiB | **No**; el reusable usa actualmente `split --bytes=90M` | No cambia el tamaño real |
-| `BACKUP_POLICY` | `daily_full_age_encrypted_openbao_signed_retain_last_30_verified` | Es el nombre exacto de la política que acuerdan Supabase y GitHub | **No** como variable de repo; está en el payload y en las validaciones | No cambia el comportamiento real |
-| `BACKUP_RETENTION_COUNT` | `30` | Decisión de conservar los 30 backups verificados más nuevos | **No**; el reusable tiene `30` en su código | No cambia la retención real |
-| `BACKUP_SIGNER_URL` | `https://camino-backup-signer.fly.dev` | Es la URL pública de la app Fly `camino-backup-signer` | **Sí**. El caller la pasa al reusable | El reusable solo aceptará la URL aprobada; si difiere, fallará |
-| `BACKUP_SIGNING_PUBLIC_KEY_SHA256` | `4011dd69e227bfcf6f39b3f44b1ad499d2a582c9f3eed93d8896e61b7485ce96` | SHA-256 del DER de `config/backup-signing-public-key.pem` | **No** como variable de repo; la huella está fijada en el reusable y Guardian | No cambia la clave que realmente se acepta |
-| `BACKUP_STORAGE_BRANCH` | `backups-signed-latest-30` | Nombre elegido para la rama que guarda las cajas cifradas | **No**; está fijada en reusable, Guardian y pruebas | No cambia la rama real |
-| `BACKUP_TIMEOUT_MINUTES` | `120` | Tiempo máximo permitido al job de backup | **No**; `timeout-minutes: 120` está en el reusable | No cambia el timeout real |
-| `BACKUP_TIMEZONE` | `Europe/Madrid` | Zona usada para decidir el día y la hora del backup | **No** en GitHub; reusable y Edge Function tienen su propia configuración | No cambia la hora real |
-| `EXPECTED_AGE_RECIPIENT_SHA256` | `f59fd599322f109270cfa7fd614e38b8eb7d5ca823c0443f8f0d55651e4b31aa` | SHA-256 exacto de `BACKUP_AGE_RECIPIENT`, sin salto de línea | **No** como variable; está fijada en reusable y Guardian | No cambia la huella que se valida |
-| `OPENBAO_OIDC_AUDIENCE` | `openbao://supabase-backup-signing` | Texto acordado entre GitHub Actions y el signer para el token OIDC | **No** como variable; está fijado en reusable y `fly.toml` | No cambia la audiencia real |
-
-## Aviso importante
-
-Solo estas dos variables gobiernan directamente el workflow actual:
+### Secrets
 
 ```text
+BACKUP_GATEWAY_TOKEN
+BACKUP_HEALTH_TOKEN
+```
+
+## Signer Fly
+
+### Variables/configuración
+
+```text
+GITHUB_OIDC_ISSUER=https://token.actions.githubusercontent.com
+GITHUB_OIDC_AUDIENCE=openbao://supabase-backup-signing
+ALLOWED_REPOSITORY=StJames-way/DB-backup
+ALLOWED_REPOSITORY_ID=1283131929
+ALLOWED_REPOSITORY_OWNER_ID=297665544
+ALLOWED_REF=refs/heads/main
+ALLOWED_JOB_WORKFLOW_REF=...@9c1562857b371396e478fe078dd1ace772a93abc
+ALLOWED_CALLER_WORKFLOW_REF=...@refs/heads/main
+OPENBAO_AUTH_MOUNT=approle-backup
+OPENBAO_TRANSIT_MOUNT=transit-backup
+OPENBAO_KEY_NAME=supabase-backup-manifest
+```
+
+### Secrets
+
+```text
+OPENBAO_ADDR
+OPENBAO_ROLE_ID
+OPENBAO_SECRET_ID
+BACKUP_GATEWAY_TOKEN
+```
+
+## Tunnel Fly
+
+```text
+TUNNEL_TOKEN
+```
+
+## Edge Function
+
+```text
+GITHUB_BACKUP_DISPATCH_TOKEN
+GITHUB_BACKUP_REPOSITORY_OWNER
+GITHUB_BACKUP_REPOSITORY
 BACKUP_AGE_RECIPIENT
-BACKUP_SIGNER_URL
+SUPABASE_BACKUP_TRIGGER_SECRET
 ```
 
-Las demás son **copias visibles del contrato**. Son útiles para saber cuál debe ser el valor, pero cambiarlas solas no modifica el código. La matriz de cambios explica todos los sitios que hay que actualizar.
-
-## Cómo calcular la huella del recipient age
-
-En macOS:
-
-```bash
-RECIPIENT="$(tr -d '\r\n' < config/age-recipient.txt)"
-printf '%s' "$RECIPIENT" | shasum -a 256
-```
-
-En Linux o WSL:
-
-```bash
-RECIPIENT="$(tr -d '\r\n' < config/age-recipient.txt)"
-printf '%s' "$RECIPIENT" | sha256sum
-```
-
-Resultado actual esperado:
+## Trust anchors versionados
 
 ```text
-f59fd599322f109270cfa7fd614e38b8eb7d5ca823c0443f8f0d55651e4b31aa
+Age recipient SHA-256:             f59fd599322f109270cfa7fd614e38b8eb7d5ca823c0443f8f0d55651e4b31aa
+Signing public key DER SHA-256:    4011dd69e227bfcf6f39b3f44b1ad499d2a582c9f3eed93d8896e61b7485ce96
+Supabase CA DER SHA-256:           807025ad50d4ed219d2c9c7d299c004f824eb00cf7f65afef607d07b72e6cafa
+Gateway URL SHA-256:               b8863d62b3e1202b604de3b499b9e4e99751259c68e4a706b72c0a98e6c35553
+Reusable SHA:                      9c1562857b371396e478fe078dd1ace772a93abc
 ```
 
-## Cómo calcular la huella de la clave pública Ed25519
+## Regla
 
-macOS:
-
-```bash
-openssl pkey \
-  -pubin \
-  -in config/backup-signing-public-key.pem \
-  -outform DER |
-shasum -a 256
-```
-
-Linux o WSL:
-
-```bash
-openssl pkey \
-  -pubin \
-  -in config/backup-signing-public-key.pem \
-  -outform DER |
-sha256sum
-```
-
-Resultado actual esperado:
-
-```text
-4011dd69e227bfcf6f39b3f44b1ad499d2a582c9f3eed93d8896e61b7485ce96
-```
+Cualquier cambio en un trust anchor exige actualizar todos sus consumidores y
+pasar Guardian + canario + recovery drill cuando corresponda.

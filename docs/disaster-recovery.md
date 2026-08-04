@@ -1,3 +1,10 @@
+# Procedimiento seguro de restauración — arquitectura actual
+
+> Este procedimiento sigue siendo válido con el gateway Cloudflare porque la
+> restauración no depende de Cloudflare, Fly ni OpenBao en línea. Se basa en el
+> backup cifrado, la clave pública de firma versionada y la identidad privada
+> `age` offline.
+
 # Procedimiento seguro de restauración
 
 Este procedimiento separa dos operaciones:
@@ -225,3 +232,19 @@ Realiza una restauración completa al menos una vez al mes y siempre después de
 - actualizar PostgreSQL de versión principal;
 - modificar el pipeline de backup;
 - recuperar OpenBao desde un snapshot.
+
+
+---
+
+## Apéndice: nombres del formato actual
+
+```text
+encrypted_backups/<base>.dump.age.aaa.part
+encrypted_backups/<base>.dump.age.aab.part
+manifests/<base>.json
+signatures/<base>.sig
+signatures/<base>.json
+```
+
+Concatena las partes en orden lexicográfico. Los dos JSON se distinguen por su
+ruta. Registra el commit exacto de `backups-signed-latest-30` usado.

@@ -1,0 +1,55 @@
+name = "REPLACE_BACKUP_GATEWAY"
+main = "src/index.js"
+compatibility_date = "2026-08-03"
+workers_dev = true
+
+[observability]
+enabled = true
+
+[secrets]
+required = ["BACKUP_GATEWAY_TOKEN", "BACKUP_HEALTH_TOKEN"]
+
+[vars]
+GITHUB_OIDC_AUDIENCE = "openbao://supabase-backup-signing"
+JWT_LEEWAY_SECONDS = "30"
+ALLOWED_REPOSITORY = "OWNER/REPO"
+ALLOWED_REPOSITORY_ID = "REPLACE_NUMERIC_ID"
+ALLOWED_REPOSITORY_OWNER_ID = "REPLACE_NUMERIC_OWNER_ID"
+ALLOWED_REF = "refs/heads/main"
+ALLOWED_CALLER_WORKFLOW_REF = "OWNER/REPO/.github/workflows/supabase-backup-dispatch.yml@refs/heads/main"
+ALLOWED_JOB_WORKFLOW_REF = "OWNER/REPO/.github/workflows/supabase-age-openbao-reusable.yml@REPLACE_40_CHAR_SHA"
+ALLOWED_JOB_WORKFLOW_SHA = "REPLACE_40_CHAR_SHA"
+ALLOWED_EVENTS = "workflow_dispatch,repository_dispatch"
+
+[[vpc_services]]
+binding = "BACKUP_SIGNER"
+service_id = "REPLACE_VPC_SERVICE_ID"
+remote = true
+
+[[ratelimits]]
+name = "EDGE_RATE_LIMITER"
+namespace_id = "REPLACE_ACCOUNT_LOCAL_ID_1"
+  [ratelimits.simple]
+  limit = 20
+  period = 60
+
+[[ratelimits]]
+name = "TOKEN_RATE_LIMITER"
+namespace_id = "REPLACE_ACCOUNT_LOCAL_ID_2"
+  [ratelimits.simple]
+  limit = 5
+  period = 60
+
+[[ratelimits]]
+name = "ORIGIN_RATE_LIMITER"
+namespace_id = "REPLACE_ACCOUNT_LOCAL_ID_3"
+  [ratelimits.simple]
+  limit = 60
+  period = 60
+
+[[ratelimits]]
+name = "READY_RATE_LIMITER"
+namespace_id = "REPLACE_ACCOUNT_LOCAL_ID_4"
+  [ratelimits.simple]
+  limit = 10
+  period = 60

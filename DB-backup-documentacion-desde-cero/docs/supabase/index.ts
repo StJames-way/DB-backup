@@ -1,143 +1,229 @@
-const JSON_HEADERS = {
-  "Content-Type": "application/json; charset=utf-8",
-  "Cache-Control": "no-store",
+const GITHUB_API_VERSION = "2026-03-10";
+const EVENT_TYPE = "supabase_backup_trigger";
+const BACKUP_POLICY =
+  "daily_full_age_encrypted_openbao_signed_retain_last_30_verified";
+const BACKUP_FORMAT_VERSION = 5;
+
+type TriggerBody = {
+  force?: boolean;
+};
+
+function requiredEnv(name: string): string {
+  const value = Deno.env.get(name)?.trim();
+  if (!value) {
+    throw new Error(`Missing required secret: ${name}`);
+  }
+  return value;
 }
 
-function jsonResponse(body: unknown, status = 200, extraHeaders: HeadersInit = {}): Response {
+function jsonResponse(
+  status: number,
+  body: Record<string, unknown>,
+): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...JSON_HEADERS, ...extraHeaders },
-  })
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+    },
+  });
 }
 
-function requireEnv(name: string): string {
-  const value = (Deno.env.get(name) ?? "").trim()
-  if (!value) throw new Error(`${name} is not configured`)
-  return value
-}
+function constantTimeEqual(left: string, right: string): boolean {
+  const encoder = new TextEncoder();
+  const a = encoder.encode(left);
+  const b = encoder.encode(right);
 
-function getDateParts(timeZone: string) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(new Date())
-  const out: Record<string, string> = {}
-  for (const part of parts) if (part.type !== "literal") out[part.type] = part.value
-  return { date: `${out.year}-${out.month}-${out.day}`, hour: out.hour }
-}
+  if (a.length !== b.length) return false;
 
-function timingSafeEqual(left: string, right: string): boolean {
-  const encoder = new TextEncoder()
-  const a = encoder.encode(left)
-  const b = encoder.encode(right)
-  if (a.length !== b.length) return false
-  let mismatch = 0
-  for (let i = 0; i < a.length; i += 1) mismatch |= a[i] ^ b[i]
-  return mismatch === 0
+  let difference = 0;
+  for (let index = 0; index < a.length; index += 1) {
+    difference |= a[index] ^ b[index];
+  }
+  return difference === 0;
 }
 
 async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))
-  return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("")
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
-function isNativeAgeRecipient(value: string): boolean {
-  return /^age1[0-9a-z]{20,}$/i.test(value)
-}
+async function parseBody(request: Request): Promise<TriggerBody> {
+  if (!request.body) return {};
 
-Deno.serve(async (req: Request) => {
-  if (req.method !== "POST") {
-    return jsonResponse({ error: "Method not allowed" }, 405, { Allow: "POST" })
+  const contentType = request.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().startsWith("application/json")) {
+    throw new TypeError("Content-Type must be application/json");
   }
+
+  const raw = await request.text();
+  if (!raw.trim()) return {};
+  if (raw.length > 1024) {
+    throw new RangeError("Request body is too large");
+  }
+
+  const parsed: unknown = JSON.parse(raw);
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    Array.isArray(parsed)
+  ) {
+    throw new TypeError("Request body must be a JSON object");
+  }
+
+  const keys = Object.keys(parsed);
+  if (keys.some((key) => key !== "force")) {
+    throw new TypeError("Unknown request field");
+  }
+
+  const force = (parsed as Record<string, unknown>).force;
+  if (force !== undefined && typeof force !== "boolean") {
+    throw new TypeError("force must be boolean");
+  }
+
+  return { force: force ?? false };
+}
+
+Deno.serve(async (request: Request): Promise<Response> => {
+  const requestId = crypto.randomUUID();
 
   try {
-    const expectedSecret = requireEnv("BACKUP_TRIGGER_SECRET")
-    const receivedSecret = req.headers.get("x-backup-trigger-secret") ?? ""
-    if (!timingSafeEqual(expectedSecret, receivedSecret)) {
-      return jsonResponse({ error: "Unauthorized" }, 401)
-    }
-
-    const githubToken = requireEnv("GITHUB_TOKEN")
-    const githubRepo = requireEnv("GITHUB_BACKUP_REPO")
-    const eventType = requireEnv("GITHUB_BACKUP_EVENT_TYPE")
-    const ageRecipient = requireEnv("BACKUP_AGE_RECIPIENT")
-    const dispatchSource = requireEnv("BACKUP_DISPATCH_SOURCE")
-    const backupPolicy = requireEnv("BACKUP_POLICY")
-    const backupFormatVersion = Number.parseInt(requireEnv("BACKUP_FORMAT_VERSION"), 10)
-    const timeZone = requireEnv("BACKUP_TIMEZONE")
-    const scheduleHour = requireEnv("BACKUP_SCHEDULE_HOUR").padStart(2, "0")
-
-    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(githubRepo)) {
-      throw new Error("GITHUB_BACKUP_REPO is invalid")
-    }
-    if (!/^[A-Za-z0-9_.-]+$/.test(eventType)) throw new Error("GITHUB_BACKUP_EVENT_TYPE is invalid")
-    if (!Number.isSafeInteger(backupFormatVersion) || backupFormatVersion < 1) {
-      throw new Error("BACKUP_FORMAT_VERSION is invalid")
-    }
-    if (!/^([01][0-9]|2[0-3])$/.test(scheduleHour)) {
-      throw new Error("BACKUP_SCHEDULE_HOUR is invalid")
-    }
-    if (!isNativeAgeRecipient(ageRecipient)) throw new Error("BACKUP_AGE_RECIPIENT is invalid")
-
-    const url = new URL(req.url)
-    const force = url.searchParams.get("force") === "1"
-    const local = getDateParts(timeZone)
-    if (!force && local.hour !== scheduleHour) {
-      return jsonResponse({
-        status: "skipped",
-        reason: `Not ${scheduleHour}:00 in ${timeZone}`,
-        local_date: local.date,
-        local_hour: local.hour,
-      })
-    }
-
-    const ageRecipientSha256 = await sha256Hex(ageRecipient)
-    const response = await fetch(`https://api.github.com/repos/${githubRepo}/dispatches`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${githubToken}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "Content-Type": "application/json",
-        "User-Agent": "supabase-backup-trigger",
-      },
-      body: JSON.stringify({
-        event_type: eventType,
-        client_payload: {
-          source: dispatchSource,
-          local_date: local.date,
-          local_hour: local.hour,
-          triggered_at: new Date().toISOString(),
-          force,
-          idempotency_key: `supabase-full-${local.date}`,
-          backup_policy: backupPolicy,
-          backup_format_version: backupFormatVersion,
-          encryption: "age-recipient",
-          age_recipient_sha256: ageRecipientSha256,
+    if (request.method !== "POST") {
+      return new Response(null, {
+        status: 405,
+        headers: {
+          allow: "POST",
+          "cache-control": "no-store",
         },
-      }),
-    })
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      return jsonResponse({
-        status: "GitHub dispatch failed",
-        github_status: response.status,
-        github_response: errorText.slice(0, 2000),
-      }, 502)
+      });
     }
 
-    return jsonResponse({
-      status: "Pipeline disparado con éxito",
-      local_date: local.date,
-      age_recipient_sha256: ageRecipientSha256,
-    })
+    /*
+     * Esta función está pensada para una invocación programada de confianza,
+     * por ejemplo pg_cron + pg_net. No debe ser un endpoint público anónimo.
+     *
+     * El invocador envía:
+     *   Authorization: Bearer <SUPABASE_BACKUP_TRIGGER_SECRET>
+     */
+    const expectedTriggerSecret = requiredEnv(
+      "SUPABASE_BACKUP_TRIGGER_SECRET",
+    );
+    const authorization = request.headers.get("authorization") ?? "";
+    const expectedAuthorization = `Bearer ${expectedTriggerSecret}`;
+
+    if (!constantTimeEqual(authorization, expectedAuthorization)) {
+      console.warn("backup_dispatch_rejected", { requestId });
+      return jsonResponse(401, {
+        error: "unauthorized",
+        request_id: requestId,
+      });
+    }
+
+    const body = await parseBody(request);
+
+    const githubToken = requiredEnv("GITHUB_BACKUP_DISPATCH_TOKEN");
+    const githubOwner = requiredEnv("GITHUB_BACKUP_REPOSITORY_OWNER");
+    const githubRepository = requiredEnv("GITHUB_BACKUP_REPOSITORY");
+    const ageRecipient = requiredEnv("BACKUP_AGE_RECIPIENT").replace(
+      /[\r\n]/g,
+      "",
+    );
+
+    if (!/^age1[0-9a-z]+$/.test(ageRecipient)) {
+      throw new Error("BACKUP_AGE_RECIPIENT has an invalid format");
+    }
+
+    const ageRecipientSha256 = await sha256Hex(ageRecipient);
+    const endpoint =
+      `https://api.github.com/repos/${encodeURIComponent(githubOwner)}/` +
+      `${encodeURIComponent(githubRepository)}/dispatches`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15_000);
+
+    let response: Response;
+    try {
+      response = await fetch(endpoint, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: `Bearer ${githubToken}`,
+          "content-type": "application/json",
+          "user-agent": "camino-seguro-supabase-backup-dispatcher",
+          "x-github-api-version": GITHUB_API_VERSION,
+        },
+        body: JSON.stringify({
+          event_type: EVENT_TYPE,
+          client_payload: {
+            source: "supabase-edge-function",
+            backup_policy: BACKUP_POLICY,
+            backup_format_version: BACKUP_FORMAT_VERSION,
+            age_recipient_sha256: ageRecipientSha256,
+            force: body.force ?? false,
+            requested_at_utc: new Date().toISOString(),
+            request_id: requestId,
+          },
+        }),
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (response.status !== 204) {
+      const githubRequestId = response.headers.get("x-github-request-id");
+      const responseText = (await response.text()).slice(0, 1000);
+
+      console.error("github_repository_dispatch_failed", {
+        requestId,
+        githubRequestId,
+        status: response.status,
+        response: responseText,
+      });
+
+      return jsonResponse(502, {
+        error: "github_dispatch_failed",
+        github_status: response.status,
+        github_request_id: githubRequestId,
+        request_id: requestId,
+      });
+    }
+
+    console.info("github_repository_dispatch_created", {
+      requestId,
+      repository: `${githubOwner}/${githubRepository}`,
+      force: body.force ?? false,
+    });
+
+    return jsonResponse(202, {
+      accepted: true,
+      event_type: EVENT_TYPE,
+      request_id: requestId,
+    });
   } catch (error) {
-    console.error(error)
-    return jsonResponse({ error: "Server misconfigured" }, 500)
+    const name = error instanceof Error ? error.name : "UnknownError";
+    const message = error instanceof Error ? error.message : "Unknown error";
+
+    console.error("backup_dispatch_internal_error", {
+      requestId,
+      name,
+      message,
+    });
+
+    const clientError =
+      error instanceof TypeError ||
+      error instanceof RangeError ||
+      error instanceof SyntaxError;
+
+    return jsonResponse(clientError ? 400 : 500, {
+      error: clientError ? "invalid_request" : "internal_error",
+      request_id: requestId,
+    });
   }
-})
+});

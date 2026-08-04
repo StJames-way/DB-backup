@@ -237,8 +237,18 @@ jobs:
               )
 
           expected_values = (
+
+              'SUPABASE_CA_CERT_SHA256',
+
+              'PGSSLROOTCERT',
+
+              'sslmodes != ["verify-full"]',
+
+              'pg_stat_ssl',
+
+              'config/prod-ca-2021.crt',
               'daily_full_age_encrypted_openbao_signed_retain_last_30_verified',
-              'https://camino-backup-signer.fly.dev',
+              'EXPECTED_BACKUP_GATEWAY_URL_SHA256:',
               'openbao://supabase-backup-signing',
               'f59fd599322f109270cfa7fd614e38b8eb7d5ca823c0443f8f0d55651e4b31aa',
               '4011dd69e227bfcf6f39b3f44b1ad499d2a582c9f3eed93d8896e61b7485ce96',
@@ -246,6 +256,15 @@ jobs:
           for value in expected_values:
               if value not in reusable and value not in caller:
                   raise SystemExit(f'ERROR: falta contrato esperado: {value}')
+
+          gateway_hash = re.search(
+              r'EXPECTED_BACKUP_GATEWAY_URL_SHA256:\s*([0-9a-f]{64})',
+              reusable,
+          )
+          if not gateway_hash or gateway_hash.group(1) == '0' * 64:
+              raise SystemExit(
+                  'ERROR: falta fijar la huella SHA-256 de la URL del gateway'
+              )
 
           if 'dispatch_format_version' not in caller or '5' not in caller:
               raise SystemExit('ERROR: el caller no declara formato v5')

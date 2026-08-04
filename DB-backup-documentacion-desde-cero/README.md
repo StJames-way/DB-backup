@@ -1,17 +1,7 @@
-# Documentación completa del backup Supabase → GitHub → OpenBao
+# Documentación exportable del backup
 
-Empieza aquí:
+Este directorio es una copia autocontenida de la documentación canónica de
+`docs/`. Incluye arquitectura, instalación, pruebas, recuperación, scripts de
+auditoría y plantillas para Cloudflare/Fly/Supabase.
 
-```text
-docs/instructions/README.md
-```
-
-La guía principal está escrita para poder seguirla sin conocimientos técnicos y contiene comandos, rutas, diagramas Mermaid, tabla de variables y matriz de cambios.
-
-## Instalar esta documentación en un clon de `DB-backup`
-
-```bash
-bash install-docs-into-repo.sh /ruta/al/DB-backup
-```
-
-El instalador solo copia `docs/`. No toca workflows operativos ni secretos.
+Ejecuta `install-docs-into-repo.sh /ruta/a/DB-backup` para instalarla.

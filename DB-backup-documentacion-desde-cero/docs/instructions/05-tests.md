@@ -1,56 +1,63 @@
-# Cómo demostrar que funciona
+# Pruebas del sistema
 
-## Prueba 1: Guardian estático
-
-Debe poner verde:
-
-```text
-Guardian / static contract
-```
-
-Comprueba sintaxis, archivos generados, claves privadas, SHA inmutables, contrato, huellas y tests deterministas.
-
-## Prueba 2: canario real
-
-Debe poner verde:
-
-```text
-Guardian / production canary
-```
-
-Hace un backup real, no un dry-run.
-
-## Prueba 3: extremo a extremo desde Supabase
+## Estáticas
 
 ```bash
-export SUPABASE_PROJECT_REF="urfbxknxmzcvgogkixdq"
-export SUPABASE_FUNCTION_NAME="trigger-github-backup"
-
-"$HOME/.local/bin/test-supabase-backup-e2e"
+python3 -m compileall tools/backup
+node --check backup-signer-cloudflare/worker/src/index.js
+python3 -m pytest -q   # en repo backup-signer
 ```
 
-Resultado esperado:
+Guardian debe rechazar:
 
-```text
-PRUEBA E2E DESDE index.ts: CORRECTA
+- `@main` en reusable;
+- hashes cero o desalineados;
+- URL signer directa en vez de gateway;
+- ausencia de CA/verify-full;
+- cambios de clave pública sin huella;
+- permisos OIDC insuficientes.
+
+## Contrato Supabase
+
+```sql
+SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid();
 ```
 
+Resultado `t`.
 
-## Protección de `main` con el plan actual
+## Contrato Worker
 
-En una organización con repositorio privado y GitHub Free, el ruleset puede quedar configurado pero no aplicado. No hagas público `DB-backup` para resolverlo. Hasta contratar GitHub Team, la regla humana es sencilla: **no fusiones ningún PR con Guardian rojo**, aunque el botón de merge siga disponible.
+| Prueba | Esperado |
+|---|---|
+| `GET /healthz` | 200 |
+| `GET /readyz` sin token | 401 |
+| `POST /v1/sign` sin OIDC | 401 |
+| JWT inválido | 403 |
+| JWKS indisponible | 503, nunca bypass |
+| cuerpo grande | 413 |
+| rate limit | 429 |
 
-La rama `backups-signed-latest-30` no debe incluirse en el ruleset de `main`, porque el workflow la actualiza directamente.
+## Contrato signer
 
-## Prueba 4: restauración
+| Prueba | Esperado |
+|---|---|
+| llamada directa sin gateway token | 403 |
+| gateway token válido + OIDC inválido | 403 |
+| manifest provenance diferente | 403 |
+| OpenBao no disponible | 502/503 según endpoint |
+| firma válida | 200 + signature/key_version/digest |
 
-1. descargar manifiesto, firma y partes;
-2. verificar tamaños y SHA-256;
-3. verificar Ed25519;
-4. unir partes;
-5. descifrar con identidad `age` offline;
-6. comparar SHA del dump plano;
-7. ejecutar `pg_restore --list`;
-8. restaurar en un proyecto Supabase aislado y desechable.
+## E2E
 
-Sin este último paso, el backup está íntegro, pero todavía no está demostrado que sea recuperable.
+El run de referencia `30878970809` terminó `success`. Para cada cambio:
+
+1. tail Worker;
+2. logs signer;
+3. lanzar workflow;
+4. confirmar `manifest_signed`;
+5. comprobar partes, manifest, sig y sig metadata;
+6. verificar que la máquina vuelve a `stopped`.
+
+## Recovery
+
+Ninguna suite sustituye al restore real. Sigue `docs/recovery-drill.md`.

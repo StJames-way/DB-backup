@@ -1,38 +1,22 @@
--- Plantilla. Sustituye PEGA_AQUI_EL_BACKUP_TRIGGER_SECRET localmente.
--- No guardes el PAT GITHUB_TOKEN en SQL.
-
-create extension if not exists pg_cron;
-create extension if not exists pg_net;
-
-select vault.create_secret(
-  'https://urfbxknxmzcvgogkixdq.supabase.co',
-  'backup_project_url'
-);
-
-select vault.create_secret(
-  'PEGA_AQUI_EL_BACKUP_TRIGGER_SECRET',
-  'backup_trigger_secret'
-);
-
+-- Sustituir PROJECT_REF y crear antes backup_trigger_secret en Vault.
 select cron.schedule(
-  'trigger-github-backup-hourly',
-  '5 * * * *',
+  'daily-supabase-backup',
+  '30 2 * * *',
   $$
   select net.http_post(
-    url := (
-      select decrypted_secret
-      from vault.decrypted_secrets
-      where name = 'backup_project_url'
-    ) || '/functions/v1/trigger-github-backup',
+    url := 'https://PROJECT_REF.supabase.co/functions/v1/trigger-supabase-backup',
     headers := jsonb_build_object(
       'Content-Type', 'application/json',
-      'x-backup-trigger-secret', (
+      'Authorization',
+      'Bearer ' || (
         select decrypted_secret
         from vault.decrypted_secrets
         where name = 'backup_trigger_secret'
+        limit 1
       )
     ),
-    body := '{}'::jsonb
-  ) as request_id;
+    body := '{"force":false}'::jsonb,
+    timeout_milliseconds := 20000
+  );
   $$
 );
