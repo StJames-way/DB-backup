@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "provider": "backup-signer-openbao-transit",
+  "algorithm": "ed25519",
+  "key_version": 1,
+  "manifest_file": "manifests/database_backup_2026-08-01_16-20-05.json",
+  "signature_file": "signatures/database_backup_2026-08-01_16-20-05.sig",
+  "manifest_sha256": "b78c77374353595aaa617e4038f11b21b9a2ec8d7a1d9d7f0228fbcbdc3cb864",
+  "signed_at_utc": "2026-08-01T14:22:14Z"
+}
