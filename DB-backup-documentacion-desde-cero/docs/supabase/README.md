@@ -1,58 +1,56 @@
-# Supabase Edge Function
+# Supabase: origen, rol y disparador
 
-## Archivo documentado
+## 1. Base de datos
 
-```text
-docs/supabase/index.ts
-```
+El backup usa Session pooler con el rol `backup_reader`. El workflow no usa la
+Edge Function para leer datos; conecta directamente por PostgreSQL TLS.
 
-## Archivo operativo local
-
-```text
-supabase/functions/trigger-github-backup/index.ts
-```
-
-## Función desplegada
+Consulta:
 
 ```text
-trigger-github-backup
+aws-0-eu-west-1.pooler.supabase.com:5432
+backup_reader.urfbxknxmzcvgogkixdq
+sslmode=verify-full
 ```
 
-## Instalar o actualizar
+Usa `docs/create-backup-reader-role.sql` y
+`docs/configure-supabase-verified-tls.md`.
 
-Desde la raíz de `DB-backup`:
+## 2. Edge Function
 
-Declara en `supabase/config.toml`:
+Archivo operativo:
 
-```toml
-[functions.trigger-github-backup]
-verify_jwt = false
+```text
+supabase/functions/trigger-supabase-backup/index.ts
 ```
 
-Después:
+Función desplegada:
+
+```text
+trigger-supabase-backup
+```
+
+Solo crea `repository_dispatch`; no hace `pg_dump` ni conoce la password DB.
+
+## Secretos
+
+```text
+GITHUB_BACKUP_DISPATCH_TOKEN
+GITHUB_BACKUP_REPOSITORY_OWNER
+GITHUB_BACKUP_REPOSITORY
+BACKUP_AGE_RECIPIENT
+SUPABASE_BACKUP_TRIGGER_SECRET
+```
+
+## Despliegue
 
 ```bash
-mkdir -p supabase/functions/trigger-github-backup
-
-install -m 0644 \
-  docs/supabase/index.ts \
-  supabase/functions/trigger-github-backup/index.ts
-
-supabase functions deploy \
-  trigger-github-backup \
-  --project-ref urfbxknxmzcvgogkixdq \
-  --no-verify-jwt
+supabase functions deploy trigger-supabase-backup   --project-ref urfbxknxmzcvgogkixdq --no-verify-jwt
 ```
 
-## Reloj automático
+`--no-verify-jwt` no la hace anónima: el código exige un Bearer secret propio.
 
-La función debe ser invocada por Supabase Cron (`pg_cron`) mediante `pg_net`. El secreto de la cabecera `x-backup-trigger-secret` se guarda en Supabase Vault. El PAT de GitHub no se guarda en SQL. La guía principal contiene el SQL completo.
+## Cron
 
-## Regla de sincronización
-
-Cada vez que cambies `docs/supabase/index.ts`:
-
-1. copia al path operativo;
-2. despliega;
-3. ejecuta `test-supabase-backup-e2e`;
-4. confirma un `repository_dispatch` nuevo y un commit nuevo de almacenamiento.
+Invócala con `pg_cron + pg_net`. Guarda el trigger secret en Vault. El PAT de
+GitHub solo vive como secreto de la Edge Function y nunca en SQL.

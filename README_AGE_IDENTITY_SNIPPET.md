@@ -1,10 +1,6 @@
-## Identidad age aprobada
+## Identidad `age` aprobada
 
-La identidad privada no está en el repositorio. El contrato público está en:
-
-```text
-config/backup-recovery-trust.json
-```
+La identidad privada no está en el repositorio. El contrato público está en `config/backup-recovery-trust.json`.
 
 ```text
 Recipient:
@@ -17,12 +13,9 @@ f59fd599322f109270cfa7fd614e38b8eb7d5ca823c0443f8f0d55651e4b31aa
 Comprobar una identidad local:
 
 ```bash
-RECIPIENT="$(
-  age-keygen -y "$HOME/claves/camino-backup-identity.txt"
-)"
-
+RECIPIENT="$(age-keygen -y "$HOME/claves/camino-backup-identity.txt")"
 printf '%s\n' "$RECIPIENT"
 printf '%s' "$RECIPIENT" | shasum -a 256
 ```
 
-El guion final de `shasum` significa entrada estándar.
+La verificación de identidad `age` es independiente de la doble validación OIDC del flujo de firma.

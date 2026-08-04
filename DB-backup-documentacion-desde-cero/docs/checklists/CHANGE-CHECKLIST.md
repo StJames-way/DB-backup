@@ -1,11 +1,15 @@
-# Checklist cada vez que cambias algo
+# Checklist para cambios
 
-1. Busca el archivo en `docs/instructions/04-update-cascade.md`.
-2. Actualiza todos los sitios de la misma fila.
-3. No fusiones un PR rojo aunque GitHub te deje.
-4. Si cambias reusable/tools/config, crea un SHA aprobado nuevo.
-5. Autoriza primero ese SHA en signer y despliega.
-6. Después actualiza el caller.
-7. Ejecuta Guardian y canario.
-8. Si cambias Edge Function, ejecuta además E2E desde Supabase.
-9. Si cambias claves, ejecuta restauración aislada.
+- [ ] cambio aislado en rama/MR
+- [ ] no se incluyeron secretos
+- [ ] hashes recalculados con el formato correcto
+- [ ] SHA completo, no rama/tag móvil
+- [ ] Worker y signer alineados antes de mover caller
+- [ ] `node --check` y tests del signer
+- [ ] Guardian en verde
+- [ ] `/readyz` desde escala cero
+- [ ] canario GitHub success
+- [ ] artefactos completos en rama de backups
+- [ ] logs sin JWT/manifiestos/secrets expuestos
+- [ ] documentación y current contract actualizados
+- [ ] recovery drill si cambia formato, cifrado, firma o restore

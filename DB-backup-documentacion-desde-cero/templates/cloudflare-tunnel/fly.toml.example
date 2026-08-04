@@ -1,0 +1,10 @@
+app = "REPLACE_TUNNEL_APP"
+primary_region = "cdg"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Sin [http_service] ni [[services]]. Solo salida hacia Cloudflare.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

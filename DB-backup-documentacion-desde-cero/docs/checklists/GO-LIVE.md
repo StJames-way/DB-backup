@@ -1,17 +1,56 @@
-# Checklist antes de considerar el sistema terminado
+# Checklist GO-LIVE
 
-- [ ] `SUPABASE_DB_URL` está solo en GitHub Secret.
-- [ ] La identidad privada `age` está offline y hay una copia de recuperación segura.
-- [ ] `config/age-recipient.txt` contiene solo la pública.
-- [ ] La huella age es `f59fd599322f109270cfa7fd614e38b8eb7d5ca823c0443f8f0d55651e4b31aa`.
-- [ ] La huella pública Ed25519 es `4011dd69e227bfcf6f39b3f44b1ad499d2a582c9f3eed93d8896e61b7485ce96`.
-- [ ] Caller y signer usan el mismo SHA reusable `9df9f393517fffddca9e4bb7264211010cb0912b`.
-- [ ] `backup-signer` tiene exactamente dos Fly Secrets.
-- [ ] `/healthz` devuelve `ok`.
-- [ ] `/readyz` devuelve `ready`.
-- [ ] `Guardian / static contract` está verde.
-- [ ] `Guardian / production canary` está verde.
-- [ ] E2E desde `trigger-github-backup` está verde.
-- [ ] Existe un commit nuevo en `backups-signed-latest-30`.
-- [ ] Existe manifiesto, firma y todas las partes.
-- [ ] Se realizó una restauración aislada.
+## Criptografía
+
+- [ ] identidad privada `age` en al menos dos soportes offline
+- [ ] recipient público y SHA-256 alineados
+- [ ] clave Transit Ed25519 no exportable
+- [ ] clave pública y huella DER alineadas
+- [ ] CA Supabase y huella DER alineadas
+
+## Supabase
+
+- [ ] `backup_reader` LOGIN, connlimit 10 y sin permisos de escritura
+- [ ] grants a todos los schemas necesarios
+- [ ] usuario pooler incluye project ref
+- [ ] `verify-full` probado localmente
+- [ ] `pg_stat_ssl` devuelve `t`
+- [ ] Edge Function protegida por trigger secret
+- [ ] PAT dispatch limitado al repo
+
+## GitHub
+
+- [ ] `SUPABASE_DB_URL` solo como secret
+- [ ] `BACKUP_AGE_RECIPIENT` y gateway URL como variables
+- [ ] reusable fijado a SHA completo
+- [ ] `id-token: write`
+- [ ] concurrency activa
+- [ ] branch protection
+- [ ] Guardian en verde
+
+## Cloudflare
+
+- [ ] Worker valida firma OIDC y todos los claims
+- [ ] JWKS cache/retries desplegados
+- [ ] gateway y health tokens separados
+- [ ] VPC Service apunta a Flycast:80
+- [ ] Tunnel Healthy
+- [ ] rate limits configurados
+- [ ] `/readyz` protegido despierta desde escala cero
+
+## Fly/OpenBao
+
+- [ ] signer exige gateway token
+- [ ] signer revalida OIDC
+- [ ] `min_machines_running=0`
+- [ ] OpenBao solo por `.internal` HTTPS
+- [ ] AppRole de mínimo privilegio
+- [ ] no quedan IP públicas en signer, o existe excepción documentada temporal
+
+## E2E y recuperación
+
+- [ ] dos backups consecutivos correctos
+- [ ] partes/manifiesto/firma presentes
+- [ ] retención validada
+- [ ] restore en base aislada correcto
+- [ ] acta de recovery drill archivada

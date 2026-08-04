@@ -1,26 +1,19 @@
 #!/usr/bin/env bash
-set -Eeuo pipefail
+set -euo pipefail
 
-SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="${1:-}"
+[ -n "$TARGET" ] || { echo "Uso: $0 /ruta/a/DB-backup" >&2; exit 2; }
+[ -d "$TARGET" ] || { echo "No existe: $TARGET" >&2; exit 2; }
 
-[ -n "$TARGET" ] || {
-  echo "Uso: install-docs-into-repo.sh /ruta/al/DB-backup" >&2
-  exit 1
-}
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-[ -d "$TARGET/.git" ] || {
-  echo "ERROR: $TARGET no parece un repositorio Git" >&2
-  exit 1
-}
+install -m 0644 "$ROOT/GUIA_BACKUP_DESDE_CERO.md" \
+  "$TARGET/docs/GUIA_BACKUP_DESDE_CERO.md"
 
-[ -f "$TARGET/.github/workflows/supabase-backup-dispatch.yml" ] || {
-  echo "ERROR: no parece el repositorio DB-backup" >&2
-  exit 1
-}
+rsync -av "$ROOT/docs/" "$TARGET/DB-backup-documentacion-desde-cero/docs/"
+install -m 0644 "$ROOT/README.md" \
+  "$TARGET/DB-backup-documentacion-desde-cero/README.md"
+install -m 0644 "$ROOT/GUIA_BACKUP_DESDE_CERO.md" \
+  "$TARGET/DB-backup-documentacion-desde-cero/GUIA_BACKUP_DESDE_CERO.md"
 
-mkdir -p "$TARGET/docs"
-cp -R "$SOURCE_DIR/docs/." "$TARGET/docs/"
-
-printf 'OK: documentación copiada a %s/docs\n' "$TARGET"
-printf 'Revisa con: git -C %q status --short\n' "$TARGET"
+echo "Documentación instalada. Revisa git diff antes de commit."

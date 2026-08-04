@@ -1,26 +1,16 @@
 #!/usr/bin/env bash
-set -Eeuo pipefail
+set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEST="$HOME/.local/bin"
+if ! command -v brew >/dev/null 2>&1; then
+  echo "Este instalador automático está preparado para Homebrew." >&2
+  echo "En Linux/WSL instala los paquetes equivalentes." >&2
+  exit 2
+fi
 
-mkdir -p "$DEST"
+brew install age gh flyctl jq openssl@3 postgresql@17 supabase/tap/supabase node
 
-install -m 0700 "$SCRIPT_DIR/deploy-backup-signer-manual-commented.sh" \
-  "$DEST/deploy-backup-signer"
-install -m 0700 "$SCRIPT_DIR/verify-backup-signer-deployment-macos-v3.sh" \
-  "$DEST/verify-backup-signer-deployment"
-install -m 0700 "$SCRIPT_DIR/deploy-backup-signer-and-verify.sh" \
-  "$DEST/deploy-backup-signer-and-verify"
-install -m 0700 "$SCRIPT_DIR/test-supabase-backup-e2e-v2.sh" \
-  "$DEST/test-supabase-backup-e2e"
-
-for script in \
-  "$DEST/deploy-backup-signer" \
-  "$DEST/verify-backup-signer-deployment" \
-  "$DEST/deploy-backup-signer-and-verify" \
-  "$DEST/test-supabase-backup-e2e"
-do
-  bash -n "$script"
-  printf 'OK: %s\n' "$script"
+for tool in age age-keygen gh fly jq openssl pg_dump pg_restore psql supabase node npm; do
+  command -v "$tool" >/dev/null || { echo "Falta $tool" >&2; exit 1; }
 done
+
+echo "Herramientas instaladas. Ejecuta gh auth login, fly auth login y supabase login."

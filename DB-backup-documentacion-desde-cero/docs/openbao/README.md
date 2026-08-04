@@ -1,46 +1,46 @@
 # OpenBao para el backup
 
-## No se crea otro OpenBao
+## Principio
 
-Este sistema usa `camino-openbao`, el OpenBao principal.
+No se crea un OpenBao público ni uno dentro de GitHub. El signer usa el cluster
+principal por DNS privado Fly y TLS con CA propia.
 
-## Permiso mínimo
+## Policy mínima
 
-El signer solo puede hacer:
-
-```text
-update transit-backup/sign/supabase-backup-manifest
+```hcl
+path "transit-backup/sign/supabase-backup-manifest" {
+  capabilities = ["update"]
+}
 ```
 
-No puede:
+El signer no puede leer, exportar, rotar ni borrar la clave, ni acceder a otros
+paths.
+
+## AppRole
 
 ```text
-leer la clave
-exportarla
-cifrar
-descifrar
-rotarla
-borrarla
-administrar OpenBao
-```
-
-## Identidad
-
-```text
-Auth mount: approle-backup/
-Role:       backup-signer-gateway
-Policy:     backup-signer-gateway
-Token:      120 segundos, un solo uso, sin default policy
+Mount: approle-backup/
+Role:  backup-signer-gateway
+Token: 120 s, un uso, sin default policy
 ```
 
 ## Clave
 
 ```text
-Transit mount: transit-backup/
-Key:           supabase-backup-manifest
-Type:          ed25519
-Exportable:    false
-Encrypt:       false
-Decrypt:       false
-Sign:          true
+Mount:      transit-backup/
+Key:        supabase-backup-manifest
+Type:       ed25519
+Exportable: false
+Sign:       true
 ```
+
+## Salud
+
+`/readyz` consulta `sys/health` con códigos de active/standby permitidos. No
+consume un token AppRole. La firma sí realiza login y usa el token de un uso.
+
+## Rotación
+
+Conserva las claves públicas de versiones históricas o una política clara de
+verificación. No destruyas una versión de firma mientras haya backups que la
+referencien.
