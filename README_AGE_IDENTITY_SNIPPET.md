@@ -19,3 +19,10 @@ printf '%s' "$RECIPIENT" | shasum -a 256
 ```
 
 La verificación de identidad `age` es independiente de la doble validación OIDC del flujo de firma.
+
+## Relación con la web de recuperación
+
+La [Backup Recovery PWA](https://stjames-way.github.io/backup-recovery-pwa/) verifica y une el backup cifrado, pero
+**nunca debe recibir este archivo de identidad privada**. Carga solo el
+manifiesto, la firma, los metadatos públicos y las partes `.part`. El
+`.dump.age` resultante se descifra después, fuera del navegador.

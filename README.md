@@ -31,6 +31,47 @@ Supabase --TLS verify-full--> GitHub Actions --age--> rama de backups
                                                                                 +--> OpenBao Transit
 ```
 
+## Recuperación asistida en el navegador
+
+> [!IMPORTANT]
+> La interfaz recomendada para **verificar y reconstruir el backup cifrado** es
+> **[Backup Recovery PWA](https://stjames-way.github.io/backup-recovery-pwa/)**.
+
+| Recurso | Dirección |
+|---|---|
+| Aplicación publicada | [https://stjames-way.github.io/backup-recovery-pwa/](https://stjames-way.github.io/backup-recovery-pwa/) |
+| Código fuente | [https://github.com/StJames-way/backup-recovery-pwa](https://github.com/StJames-way/backup-recovery-pwa) |
+| Guía visual PDF | [Abrir guía paso a paso](https://stjames-way.github.io/backup-recovery-pwa/guia-recuperacion-backup-paso-a-paso.pdf) |
+| Contrato público desplegado | [backup-recovery-trust.json](https://stjames-way.github.io/backup-recovery-pwa/backup-recovery-trust.json) |
+
+La PWA se publica desde un **repositorio hermano** mediante GitHub Pages. Los
+archivos seleccionados permanecen en el ordenador del operador: no se suben a
+GitHub Pages ni a una API. La aplicación comprueba:
+
+- el contrato público y el recipient `age` aprobado;
+- la huella de la clave pública Ed25519;
+- el manifiesto y la firma `.sig` producida mediante OpenBao Transit;
+- los metadatos de firma JSON, cuando existen;
+- el nombre, orden, tamaño y SHA-256 de cada parte `.part`;
+- el SHA-256 final del archivo cifrado `.dump.age`;
+- la unión secuencial de las partes o la generación de un kit de terminal.
+
+La PWA **no solicita ni recibe la identidad privada `age`**, no descifra el
+dump, no ejecuta `pg_restore` y no sustituye un simulacro de restauración real.
+El resultado de la unión sigue siendo un archivo cifrado `.dump.age`.
+
+Uso rápido:
+
+1. descarga o clona la rama `backups-signed-latest-30`;
+2. abre la [Backup Recovery PWA](https://stjames-way.github.io/backup-recovery-pwa/);
+3. selecciona la carpeta que contiene `manifests/`, `signatures/` y
+   `encrypted_backups/`, o carga los archivos manualmente;
+4. pulsa **Verificar y unir** o genera el **kit completo de terminal**;
+5. descifra después con la identidad privada `age` offline y restaura solo en
+   una base aislada.
+
+La explicación completa está en [`docs/recovery-pwa.md`](docs/recovery-pwa.md).
+
 ## Documentación
 
 - [Guía completa](docs/GUIA_BACKUP_DESDE_CERO.md)
@@ -41,6 +82,7 @@ Supabase --TLS verify-full--> GitHub Actions --age--> rama de backups
 - [Operaciones](docs/operations-runbook.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Portar a otro proyecto](docs/port-to-another-project.md)
+- [PWA de recuperación](docs/recovery-pwa.md)
 - [Restauración](docs/disaster-recovery.md)
 - [Recovery drill](docs/recovery-drill.md)
 - [Fronteras de seguridad](docs/security-boundaries.md)

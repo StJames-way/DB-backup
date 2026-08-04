@@ -237,6 +237,32 @@ min_machines_running = 0
 Una llamada protegida a `/readyz` debe despertar el signer mediante Flycast.
 No es necesario mantener una máquina permanentemente encendida.
 
+## Plano de recuperación: PWA local
+
+La creación/firma y la recuperación son planos distintos. La interfaz pública
+de recuperación es:
+
+- Aplicación: [https://stjames-way.github.io/backup-recovery-pwa/](https://stjames-way.github.io/backup-recovery-pwa/)
+- Código: [https://github.com/StJames-way/backup-recovery-pwa](https://github.com/StJames-way/backup-recovery-pwa)
+
+```mermaid
+flowchart LR
+    B[backups-signed-latest-30] --> O[Operador obtiene snapshot inmutable]
+    O --> P[Backup Recovery PWA en el navegador]
+    P -->|verifica firma, hashes y orden| E[Archivo .dump.age unido]
+    E -->|identidad age offline| D[Dump PostgreSQL plano]
+    D --> R[Base PostgreSQL aislada]
+```
+
+La PWA recibe únicamente archivos públicos/cifrados elegidos por el operador.
+El procesamiento se realiza localmente y no se suben partes a GitHub Pages. La
+PWA no conoce la identidad privada `age`, no descifra y no restaura PostgreSQL.
+
+Esta herramienta verifica el conjunto y reduce errores manuales, pero la prueba
+de recuperabilidad termina únicamente después de `pg_restore` en una base
+aislada. Debe existir además un camino CLI/offline por si GitHub Pages no está
+disponible.
+
 ## Límites de confianza
 
 - GitHub Actions conoce `SUPABASE_DB_URL` y procesa temporalmente el dump plano.

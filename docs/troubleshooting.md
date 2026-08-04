@@ -119,6 +119,58 @@ es Cloudflare si el Worker no recibió ninguna petición.
 Revisa si el workflow decidió `skip=true` porque ya existe uno del día. Usa el
 input `force` únicamente para canarios controlados.
 
+## Backup Recovery PWA
+
+### La web no abre o aparece una versión antigua
+
+- URL correcta: `https://stjames-way.github.io/backup-recovery-pwa/`;
+- recarga forzada y prueba una ventana privada;
+- comprueba el estado del workflow Pages del repo `backup-recovery-pwa`;
+- si Pages no está disponible, ejecuta una copia local fijada o usa el kit CLI;
+- registra el commit/build utilizado en la recuperación.
+
+### No detecta la carpeta
+
+Selecciona la raíz que contiene exactamente:
+
+```text
+manifests/
+signatures/
+encrypted_backups/
+```
+
+No selecciones únicamente `encrypted_backups/`. En Safari u otros navegadores
+con soporte limitado, usa la carga manual o genera/usa el kit de terminal.
+
+### Firma inválida
+
+Comprueba que manifiesto y `.sig` tienen el mismo timestamp/base, que la clave
+pública corresponde a la versión indicada y que el trust JSON no pertenece a
+otro proyecto. No omitas la firma para continuar.
+
+### Falta una parte o el SHA-256 no coincide
+
+Vuelve a obtener el snapshot desde el commit fijado de
+`backups-signed-latest-30`. No renombres, edites ni combines partes de fechas
+distintas. Los sufijos `aaa`, `aab`, etc. son correctos.
+
+### El JSON de metadatos no está
+
+`signatures/<base>.json` es opcional para la verificación criptográfica
+principal. La PWA puede mostrar una advertencia, pero todavía debe exigir el
+manifiesto, la firma `.sig`, la clave pública y todas las partes.
+
+### La PWA pide la identidad privada `age`
+
+Detente. La aplicación oficial no necesita ni debe solicitar esa identidad.
+Verifica la URL, el certificado, el repositorio/build y usa una copia local
+confiable.
+
+### El `.dump.age` se creó pero no puedo abrirlo
+
+Es correcto: continúa cifrado. Debes descifrarlo fuera del navegador con la
+identidad privada offline y después validar `pg_restore --list`.
+
 ## Nombres aparentemente duplicados
 
 No es un error:

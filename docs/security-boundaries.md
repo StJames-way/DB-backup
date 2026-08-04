@@ -75,3 +75,29 @@ políticas RLS. Es un privilegio elevado de lectura. Debe compensarse con:
 
 Por eso siguen siendo obligatorios branch protection, revisiones, copias de la
 identidad `age`, monitorización y simulacros de recuperación.
+
+## GitHub Pages / Backup Recovery PWA
+
+La PWA publicada en [https://stjames-way.github.io/backup-recovery-pwa/](https://stjames-way.github.io/backup-recovery-pwa/) es una interfaz estática de
+verificación y unión local. Su frontera es:
+
+```text
+entradas:  manifest, .sig, metadatos públicos y partes cifradas
+salida:    .dump.age verificado/unido o kit de terminal
+secretos:  ninguno
+prohibido: identidad privada age, SUPABASE_DB_URL, AppRole, tokens gateway
+```
+
+GitHub Pages entrega HTML/JS y trust anchors públicos. La lectura de los
+archivos elegidos ocurre en el navegador; no existe una API de subida. La PWA
+no debe añadirse al plano de firma ni recibir secretos para “facilitar” la
+restauración.
+
+Riesgos residuales y mitigaciones:
+
+- compromiso del build web: fijar commit/release y comparar trust anchors;
+- indisponibilidad de Pages: conservar copia local y kit CLI;
+- extensión de navegador maliciosa: usar estación limpia/perfil dedicado;
+- falsa sensación de recuperación: exigir siempre restore aislado;
+- mezcla de fechas: la PWA y el verificador deben rechazarla.
+

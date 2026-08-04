@@ -150,6 +150,27 @@ Forma esperada, sin mostrar contraseña:
 postgresql://backup_reader.urfbxknxmzcvgogkixdq:<PASSWORD_URLENCODED>@aws-0-eu-west-1.pooler.supabase.com:5432/postgres?sslmode=verify-full
 ```
 
+## Interfaz de recuperación publicada
+
+| Campo | Valor actual |
+|---|---|
+| Aplicación | `https://stjames-way.github.io/backup-recovery-pwa/` |
+| Repositorio | `StJames-way/backup-recovery-pwa` |
+| Hosting | GitHub Pages |
+| Contrato público | `https://stjames-way.github.io/backup-recovery-pwa/backup-recovery-trust.json` |
+| Guía visual | `https://stjames-way.github.io/backup-recovery-pwa/guia-recuperacion-backup-paso-a-paso.pdf` |
+| Procesamiento | local en el navegador; sin subida de partes |
+| Identidad privada `age` | nunca solicitada ni incluida |
+
+La PWA verifica el contrato, la clave pública, la firma Ed25519 del manifiesto,
+los metadatos opcionales, las partes y el SHA-256 final; después une o genera
+un kit de terminal. El resultado permanece cifrado y debe descifrarse fuera de
+la PWA antes de restaurar en una base aislada.
+
+La PWA es un repositorio y despliegue independientes. Un cambio de recipient,
+clave pública, huellas o schema exige actualizar y probar tanto `DB-backup`
+como `backup-recovery-pwa`.
+
 ## Elementos que no se copian a otro proyecto
 
 No copies sin recalcular:
