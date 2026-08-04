@@ -24,7 +24,7 @@ jobs:
   signed-backup:
     # PASO OBLIGATORIO: sustituye el marcador por el SHA completo del commit
     # aprobado en StJames-way/backup-workflows. Nunca uses @main ni un tag móvil.
-    uses: StJames-way/DB-backup/.github/workflows/supabase-age-openbao-reusable.yml@9c1562857b371396e478fe078dd1ace772a93abc
+    uses: StJames-way/DB-backup/.github/workflows/supabase-age-openbao-reusable.yml@a9e09a5b6d12a9b2fe2f13280f75e7691a1c6b39
     with:
       event_name: ${{ github.event_name }}
       force: ${{ github.event_name == 'workflow_dispatch' && inputs.force || github.event.client_payload.force || false }}
