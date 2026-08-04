@@ -26,22 +26,28 @@ ALTER ROLE backup_reader SET idle_in_transaction_session_timeout = '2min';
 ALTER ROLE backup_reader SET lock_timeout = '30s';
 ALTER ROLE backup_reader SET statement_timeout = '2h';
 
--- Permisos de conexión y lectura. Ajustar si la base no se llama postgres.
+-- Permisos mínimos para un backup lógico de los datos de aplicación,
+-- Auth, metadatos de Storage y migraciones. Ajustar si la base no se llama postgres.
 GRANT CONNECT ON DATABASE postgres TO backup_reader;
-GRANT USAGE ON SCHEMA public TO backup_reader;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO backup_reader;
-GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO backup_reader;
+GRANT USAGE ON SCHEMA public, auth, storage, supabase_migrations TO backup_reader;
+GRANT SELECT ON ALL TABLES IN SCHEMA public, auth, storage, supabase_migrations TO backup_reader;
+GRANT SELECT ON ALL SEQUENCES IN SCHEMA public, auth, storage, supabase_migrations TO backup_reader;
 
--- Aplicar también a objetos futuros creados por el rol que ejecuta estos ALTER.
+-- Los ALTER DEFAULT PRIVILEGES afectan solo a objetos futuros creados por el
+-- rol que ejecuta cada sentencia. Repetirlos como cada propietario real.
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT SELECT ON TABLES TO backup_reader;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT SELECT ON SEQUENCES TO backup_reader;
+ALTER DEFAULT PRIVILEGES IN SCHEMA auth
+  GRANT SELECT ON TABLES TO backup_reader;
+ALTER DEFAULT PRIVILEGES IN SCHEMA storage
+  GRANT SELECT ON TABLES TO backup_reader;
+ALTER DEFAULT PRIVILEGES IN SCHEMA supabase_migrations
+  GRANT SELECT ON TABLES TO backup_reader;
 
--- Repite USAGE/SELECT y ALTER DEFAULT PRIVILEGES para cada schema de negocio.
--- Ejemplo:
--- GRANT USAGE ON SCHEMA storage TO backup_reader;
--- GRANT SELECT ON ALL TABLES IN SCHEMA storage TO backup_reader;
+-- Para incluir otros schemas con datos relevantes, por ejemplo vault, cron o
+-- net, concédeles también USAGE y SELECT tras valorar su sensibilidad.
 
 -- Defensa adicional: retirar creación en public si no es necesaria.
 REVOKE CREATE ON SCHEMA public FROM backup_reader;

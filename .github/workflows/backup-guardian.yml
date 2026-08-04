@@ -247,6 +247,7 @@ jobs:
               'pg_stat_ssl',
 
               'config/prod-ca-2021.crt',
+              'create_validated_dump.py',
               'daily_full_age_encrypted_openbao_signed_retain_last_30_verified',
               'EXPECTED_BACKUP_GATEWAY_URL_SHA256:',
               'openbao://supabase-backup-signing',
@@ -298,6 +299,8 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
+
+          python "$GITHUB_WORKSPACE/tools/backup/create_validated_dump.py" --self-test
 
           TMP_TEST="$(mktemp -d)"
           trap 'rm -rf "$TMP_TEST"' EXIT INT TERM
