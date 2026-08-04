@@ -15,6 +15,17 @@ AppRole ni PAT de GitHub debe escribirse en Git o en esta documentación.
 ---
 
 
+## Web de recuperación oficial
+
+> [!IMPORTANT]
+> Abre **[https://stjames-way.github.io/backup-recovery-pwa/](https://stjames-way.github.io/backup-recovery-pwa/)** para verificar localmente el manifiesto, la
+> firma OpenBao, las partes y sus hashes, y unir el `.dump.age`. El código está
+> en [https://github.com/StJames-way/backup-recovery-pwa](https://github.com/StJames-way/backup-recovery-pwa). La PWA no sube partes, no pide la identidad
+> privada `age`, no descifra y no ejecuta `pg_restore`.
+
+Consulta el capítulo **Backup Recovery PWA** de esta guía y
+[`docs/recovery-pwa.md`](recovery-pwa.md).
+
 # Arquitectura del backup firmado con verificación OIDC en Cloudflare
 
 ## Resumen
@@ -1623,6 +1634,62 @@ No declares el proyecto listo hasta completar la checklist GO-LIVE.
 
 ---
 
+
+# Backup Recovery PWA
+
+## Acceso
+
+```text
+Aplicación: https://stjames-way.github.io/backup-recovery-pwa/
+Código:     https://github.com/StJames-way/backup-recovery-pwa
+Guía PDF:   https://stjames-way.github.io/backup-recovery-pwa/guia-recuperacion-backup-paso-a-paso.pdf
+```
+
+La PWA es el camino guiado para consumir los artefactos creados por este
+sistema. Selecciona la carpeta con `manifests/`, `signatures/` y
+`encrypted_backups/`, verifica el trust público, la firma Ed25519, los tamaños
+y SHA-256, y produce el `.dump.age` unido o un kit de terminal.
+
+## Regla de seguridad
+
+Nunca cargues la identidad privada `age` en la PWA ni en GitHub Pages. La PWA
+trabaja con material público o cifrado y no necesita secretos. El resultado
+permanece cifrado.
+
+## Flujo
+
+```mermaid
+flowchart LR
+    B[backups-signed-latest-30] --> P[Backup Recovery PWA local]
+    P -->|firma + hashes correctos| A[.dump.age unido]
+    A -->|age identity offline| D[.dump]
+    D --> R[pg_restore en base aislada]
+```
+
+## Uso
+
+1. clona la rama de backups y fija su commit;
+2. abre la PWA o una copia local fijada;
+3. carga carpeta completa o archivos manuales de una única fecha;
+4. revisa que firma, partes y SHA final sean válidos;
+5. une en navegador o genera kit de terminal;
+6. descifra fuera de la PWA;
+7. ejecuta `pg_restore --list`;
+8. restaura únicamente en una base nueva y aislada;
+9. guarda acta y destruye el dump plano/entorno temporal.
+
+## Qué ocurre si GitHub Pages falla
+
+GitHub Pages no debe ser un punto único de fallo. Conserva un clon o release
+estático de `backup-recovery-pwa` y las herramientas CLI de `DB-backup`. La
+recuperación debe poder continuar sin Cloudflare, Fly, OpenBao ni Pages en
+línea, porque la firma y la clave pública ya están versionadas.
+
+## Portar a otro proyecto
+
+Despliega una PWA distinta y sustituye recipient, huellas, clave pública,
+contrato y enlaces. La PWA de Camino Seguro no debe aceptar automáticamente
+backups de otro proyecto. Prueba rechazo cruzado antes del go-live.
 
 # Simulacro de recuperación
 

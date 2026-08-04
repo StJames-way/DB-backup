@@ -95,6 +95,35 @@ El Worker del proyecto nuevo debe tener sus propios:
 - `BACKUP_GATEWAY_TOKEN`;
 - `BACKUP_HEALTH_TOKEN`.
 
+## Recovery PWA del proyecto nuevo
+
+La URL actual:
+
+```text
+https://stjames-way.github.io/backup-recovery-pwa/
+```
+
+solo debe validar los trust anchors del proyecto actual. Para otro proyecto crea
+y publica una PWA propia a partir de:
+
+```text
+https://github.com/StJames-way/backup-recovery-pwa
+```
+
+Actualiza al menos:
+
+- repositorio/nombre del sistema de backup;
+- recipient `age` y SHA-256;
+- clave pública Ed25519 y huella DER;
+- `recovery-trust.json`;
+- schema y versiones admitidas del manifiesto;
+- enlaces a la rama de backups y a la guía;
+- URL de GitHub Pages y documentación principal.
+
+No copies la identidad privada `age` al repositorio PWA. Antes del go-live, la
+PWA nueva debe verificar un backup completo de su propio proyecto y rechazar
+un conjunto del proyecto anterior.
+
 ## Prueba de no contaminación
 
 Antes del go-live, confirma que el token OIDC del proyecto A es rechazado por

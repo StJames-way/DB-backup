@@ -2,13 +2,14 @@
 
 ## 0. Decide el alcance
 
-Se necesitan cuatro piezas de código y tres plataformas:
+Se necesitan cinco piezas de código y tres plataformas:
 
 ```text
 DB-backup                         GitHub workflows, verificación y almacenamiento
 backup-signer                    FastAPI privado en Fly
 backup-signer-cloudflare/worker  gateway público con OIDC
 backup-signer-cloudflare/tunnel  conector saliente cloudflared en Fly
+backup-recovery-pwa                verificación y unión local mediante GitHub Pages
 
 Supabase                         origen y disparador
 Cloudflare                       Worker, Tunnel y VPC Service
@@ -226,7 +227,36 @@ Fija la huella de URL del gateway en reusable/Guardian y alinea el SHA en:
 - Worker;
 - signer.
 
-## 13. Configura la Edge Function
+## 13. Publica y sincroniza la Recovery PWA
+
+Repositorio actual de referencia:
+
+```text
+https://github.com/StJames-way/backup-recovery-pwa
+```
+
+Producción actual:
+
+```text
+https://stjames-way.github.io/backup-recovery-pwa/
+```
+
+Para una instalación nueva:
+
+1. crea o bifurca un repositorio para la PWA;
+2. sustituye el recipient `age`, su SHA-256, la clave pública Ed25519 y su
+   huella;
+3. actualiza `recovery-trust.json` y cualquier schema permitido;
+4. habilita GitHub Pages desde el build inmutable esperado;
+5. añade la URL al README de `DB-backup`;
+6. prueba con un backup real cifrado y firmado;
+7. confirma que nunca se solicita la identidad privada `age`.
+
+La PWA no debe compartir secretos con GitHub Actions, Fly, Cloudflare u
+OpenBao. Contiene solo trust anchors públicos. Conserva también un clon/release
+offline y el camino de terminal para una caída de GitHub Pages.
+
+## 14. Configura la Edge Function
 
 Nombre actual:
 
@@ -250,12 +280,12 @@ supabase functions deploy trigger-supabase-backup   --project-ref <PROJECT_REF> 
 
 La función sigue exigiendo su propio Bearer secret.
 
-## 14. Programa cron
+## 15. Programa cron
 
 Guarda el trigger secret en Supabase Vault y usa `pg_cron + pg_net`. No guardes
 el PAT de GitHub en SQL.
 
-## 15. Pruebas antes del corte
+## 16. Pruebas antes del corte
 
 1. conexión local `backup_reader`;
 2. `pg_stat_ssl = t`;
@@ -268,7 +298,7 @@ el PAT de GitHub en SQL.
 9. dos canarios seguidos;
 10. retirar IPs públicas del signer y repetir canario.
 
-## 16. Evidencia de la instalación actual
+## 17. Evidencia de la instalación actual
 
 El despliegue actual completó el run `30878970809` y publicó
 `database_backup_2026-08-04_06-53-27` con partes `aaa` y `aab`.

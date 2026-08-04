@@ -2,13 +2,14 @@
 
 ## 0. Decide el alcance
 
-Se necesitan cuatro piezas de código y tres plataformas:
+Se necesitan cinco piezas de código y tres plataformas:
 
 ```text
 DB-backup                         GitHub workflows, verificación y almacenamiento
 backup-signer                    FastAPI privado en Fly
 backup-signer-cloudflare/worker  gateway público con OIDC
 backup-signer-cloudflare/tunnel  conector saliente cloudflared en Fly
+backup-recovery-pwa                verificación y unión local mediante GitHub Pages
 
 Supabase                         origen y disparador
 Cloudflare                       Worker, Tunnel y VPC Service
@@ -272,3 +273,9 @@ el PAT de GitHub en SQL.
 
 El despliegue actual completó el run `30878970809` y publicó
 `database_backup_2026-08-04_06-53-27` con partes `aaa` y `aab`.
+
+## Publicar la Recovery PWA
+
+Despliega una copia propia de [https://github.com/StJames-way/backup-recovery-pwa](https://github.com/StJames-way/backup-recovery-pwa), actualiza recipient,
+huellas, clave pública y `recovery-trust.json`, habilita GitHub Pages y prueba
+un backup real. La identidad privada `age` nunca entra en ese repositorio.

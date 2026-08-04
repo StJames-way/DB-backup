@@ -34,6 +34,33 @@ Necesitas:
 La firma acredita el manifiesto. La identidad privada `age` permite descifrar.
 Son controles distintos y ambos son obligatorios.
 
+## Ruta recomendada: verificación guiada con la PWA
+
+Antes del descifrado puedes verificar y unir el backup con:
+
+**[https://stjames-way.github.io/backup-recovery-pwa/](https://stjames-way.github.io/backup-recovery-pwa/)**
+
+La aplicación procesa localmente los archivos seleccionados, verifica el
+manifiesto, la firma Ed25519 de OpenBao, los metadatos opcionales, los tamaños
+y SHA-256 de las partes y el hash final del `.dump.age`. También puede generar
+un kit de terminal.
+
+Selecciona la carpeta raíz que contiene:
+
+```text
+manifests/
+signatures/
+encrypted_backups/
+```
+
+La PWA **no recibe la identidad privada `age`**, no descifra y no ejecuta
+`pg_restore`. Tras la verificación debes continuar con el descifrado offline y
+la restauración aislada descritos en este documento. Conserva el commit de la
+rama de backups, el commit/build de la PWA y el informe generado.
+
+Para una emergencia sin GitHub Pages, usa un clon/release local de
+`StJames-way/backup-recovery-pwa` o el flujo CLI versionado de este repositorio.
+
 ## 2. Descargar una copia inmutable
 
 No trabajes directamente sobre la copia remota. Clona y fija el commit:
@@ -67,7 +94,7 @@ Define las rutas del mismo timestamp:
 STAMP="2026-07-29_03-00-00"
 
 MANIFEST="manifests/database_backup_${STAMP}.json"
-SIGNATURE="signatures/database_backup_${STAMP}.signature"
+SIGNATURE="signatures/database_backup_${STAMP}.sig"
 PUBLIC_KEY="config/backup-signing-public-key.pem"
 AGE_IDENTITY="/VOLUMEN-OFFLINE/backup-age-identity.txt"
 ```

@@ -54,3 +54,14 @@
 - [ ] retención validada
 - [ ] restore en base aislada correcto
 - [ ] acta de recovery drill archivada
+
+## Recovery PWA
+
+- [ ] `https://stjames-way.github.io/backup-recovery-pwa/` o la URL propia abre correctamente.
+- [ ] El repositorio/build de la PWA está fijado y registrado.
+- [ ] `recovery-trust.json` coincide con `DB-backup`.
+- [ ] La PWA verifica un backup completo del proyecto.
+- [ ] Rechaza un backup de otro proyecto o trust anchor distinto.
+- [ ] No solicita identidad privada `age` ni secretos de infraestructura.
+- [ ] Existe copia local/kit CLI para indisponibilidad de GitHub Pages.
+- [ ] Se completó además un `pg_restore` en base aislada.

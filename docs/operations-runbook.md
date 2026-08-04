@@ -63,6 +63,27 @@ for ATTEMPT in $(seq 1 20); do
 done
 ```
 
+## Smoke test de la Recovery PWA
+
+Aplicación:
+
+```text
+https://stjames-way.github.io/backup-recovery-pwa/
+```
+
+Después de cambiar el formato del manifiesto, recipient `age`, clave pública,
+trust JSON o build de la PWA:
+
+1. usa un backup real conocido de `backups-signed-latest-30`;
+2. carga carpeta completa en la PWA;
+3. exige firma, partes y hash final correctos;
+4. genera el kit de terminal;
+5. registra el commit de ambas ramas/repositorios;
+6. verifica que nunca se solicita la identidad privada.
+
+Una caída de la web no debe bloquear la recuperación: conserva un clon/release
+local de `backup-recovery-pwa` y los scripts CLI.
+
 ## Rotación de la contraseña DB
 
 1. Genera una contraseña aleatoria fuera del repositorio.
